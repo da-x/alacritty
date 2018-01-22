@@ -32,7 +32,7 @@ use crate::ansi::{Color, CursorStyle, NamedColor};
 
 pub use crate::config::colors::Colors;
 pub use crate::config::debug::Debug;
-pub use crate::config::font::{Font, FontDescription};
+pub use crate::config::font::{Font, FontDescription, DeserializeSize, Size};
 pub use crate::config::scrolling::Scrolling;
 pub use crate::config::visual_bell::{VisualBellAnimation, VisualBellConfig};
 pub use crate::config::window::{Decorations, Dimensions, StartupMode, WindowConfig, DEFAULT_NAME};
@@ -42,6 +42,38 @@ pub const LOG_TARGET_CONFIG: &str = "alacritty_config";
 const MAX_SCROLLBACK_LINES: u32 = 100_000;
 
 pub type MockConfig = Config<HashMap<String, serde_yaml::Value>>;
+
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct SmallFontSize {
+    // Font size in points
+    #[serde(deserialize_with="DeserializeSize::deserialize")]
+    pub size: Size,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct SmallFontConfig {
+    /// Font configuration
+    #[serde(default)]
+    font: Font,
+
+    // Font size in points
+    pub upper_bound: Option<SmallFontSize>,
+}
+
+impl SmallFontConfig {
+    pub fn check_bound(&self, size: Size) -> Option<&Font> {
+        match &self.upper_bound {
+            Some(upper_bound) => {
+                if size <= upper_bound.size {
+                    Some(&self.font)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    }
+}
 
 /// Top-level config type
 #[derive(Debug, PartialEq, Default, Deserialize)]
@@ -56,7 +88,11 @@ pub struct Config<T> {
 
     /// Font configuration
     #[serde(default, deserialize_with = "failure_default")]
-    pub font: Font,
+    font: Font,
+
+    /// Font configuration
+    #[serde(default, deserialize_with = "failure_default")]
+    small_font: Option<SmallFontConfig>,
 
     /// Should draw bold text with brighter colors instead of bold font
     #[serde(default, deserialize_with = "failure_default")]
@@ -158,6 +194,24 @@ impl<T> Config<T> {
     #[inline]
     pub fn live_config_reload(&self) -> bool {
         self.live_config_reload.0
+    }
+
+    /// Return font to use
+    #[inline]
+    pub fn font(&self, size: &Size) -> &Font {
+        match &self.small_font {
+            &None => &self.font,
+            &Some(ref small_font_config) => match small_font_config.check_bound(*size) {
+                None => &self.font,
+                Some(small_font) => small_font,
+            },
+        }
+    }
+
+    /// Return the basic font to use
+    #[inline]
+    pub fn basic_font(&self) -> &Font {
+        &self.font
     }
 
     #[inline]
