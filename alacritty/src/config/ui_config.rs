@@ -5,15 +5,52 @@ use alacritty_terminal::config::{failure_default, Percentage, LOG_TARGET_CONFIG}
 
 use crate::config::bindings::{self, Binding, KeyBinding, MouseBinding};
 use crate::config::debug::Debug;
-use crate::config::font::Font;
+use crate::config::font::{Size, Font};
+use crate::config::font::{DeserializeSize};
 use crate::config::mouse::Mouse;
 use crate::config::window::WindowConfig;
+
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct SmallFontSize {
+    // Font size in points
+    #[serde(deserialize_with="DeserializeSize::deserialize")]
+    pub size: Size,
+}
+
+#[derive(Debug, PartialEq, Deserialize)]
+pub struct SmallFontConfig {
+    /// Font configuration
+    #[serde(default)]
+    font: Font,
+
+    // Font size in points
+    pub upper_bound: Option<SmallFontSize>,
+}
+
+impl SmallFontConfig {
+    pub fn check_bound(&self, size: Size) -> Option<&Font> {
+        match &self.upper_bound {
+            Some(upper_bound) => {
+                if size <= upper_bound.size {
+                    Some(&self.font)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    }
+}
 
 #[derive(Debug, PartialEq, Deserialize)]
 pub struct UIConfig {
     /// Font configuration.
     #[serde(default, deserialize_with = "failure_default")]
     pub font: Font,
+
+    /// Font configuration
+    #[serde(default, deserialize_with = "failure_default")]
+    small_font: Option<SmallFontConfig>,
 
     /// Window configuration.
     #[serde(default, deserialize_with = "failure_default")]
@@ -60,6 +97,7 @@ impl Default for UIConfig {
             key_bindings: default_key_bindings(),
             mouse_bindings: default_mouse_bindings(),
             debug: Default::default(),
+            small_font: Default::default(),
             alt_send_esc: Default::default(),
             background_opacity: Default::default(),
             live_config_reload: Default::default(),
@@ -77,6 +115,24 @@ impl UIConfig {
     #[inline]
     pub fn dynamic_title(&self) -> bool {
         self.dynamic_title.unwrap_or_else(|| self.window.dynamic_title())
+    }
+
+    /// Return font to use
+    #[inline]
+    pub fn font(&self, size: &Size) -> &Font {
+        match &self.small_font {
+            &None => &self.font,
+            &Some(ref small_font_config) => match small_font_config.check_bound(*size) {
+                None => &self.font,
+                Some(small_font) => small_font,
+            },
+        }
+    }
+
+    /// Return the basic font to use
+    #[inline]
+    pub fn basic_font(&self) -> &Font {
+        &self.font
     }
 
     #[inline]

@@ -30,7 +30,7 @@ use alacritty_terminal::index::{Direction, Line};
 use alacritty_terminal::selection::Selection;
 use alacritty_terminal::term::{RenderableCell, SizeInfo, Term, TermMode};
 
-use crate::config::font::Font;
+use crate::config::font::{Size, Font};
 use crate::config::window::StartupMode;
 use crate::config::Config;
 use crate::event::{Mouse, SearchState};
@@ -163,14 +163,15 @@ pub struct Display {
 }
 
 impl Display {
-    pub fn new<E>(config: &Config, event_loop: &EventLoop<E>) -> Result<Display, Error> {
+    pub fn new<E>(config: &Config, font_size: Size, event_loop: &EventLoop<E>) -> Result<Display, Error> {
         // Guess DPR based on first monitor.
         let estimated_dpr =
             event_loop.available_monitors().next().map(|m| m.scale_factor()).unwrap_or(1.);
 
         // Guess the target window dimensions.
-        let metrics = GlyphCache::static_metrics(config.ui_config.font.clone(), estimated_dpr)?;
-        let (cell_width, cell_height) = compute_cell_size(config, &metrics);
+        let font = config.ui_config.font(&font_size);
+        let metrics = GlyphCache::static_metrics(font.clone(), estimated_dpr)?;
+        let (cell_width, cell_height) = compute_cell_size(font, &metrics);
 
         let dimensions = GlyphCache::calculate_dimensions(
             &config.ui_config.window,
@@ -217,7 +218,7 @@ impl Display {
         let mut renderer = QuadRenderer::new()?;
 
         let (glyph_cache, cell_width, cell_height) =
-            Self::new_glyph_cache(dpr, &mut renderer, config)?;
+            Self::new_glyph_cache(dpr, &mut renderer, font_size, config)?;
 
         let padding = config.ui_config.window.padding;
         let mut padding_x = f32::from(padding.x) * dpr as f32;
@@ -321,9 +322,10 @@ impl Display {
     fn new_glyph_cache(
         dpr: f64,
         renderer: &mut QuadRenderer,
+        font_size: Size,
         config: &Config,
     ) -> Result<(GlyphCache, f32, f32), Error> {
-        let font = config.ui_config.font.clone();
+        let font = config.ui_config.font(&font_size).clone();
         let rasterizer = Rasterizer::new(dpr as f32, config.ui_config.font.use_thin_strokes())?;
 
         // Initialize glyph cache.
@@ -344,22 +346,23 @@ impl Display {
         // Need font metrics to resize the window properly. This suggests to me the
         // font metrics should be computed before creating the window in the first
         // place so that a resize is not needed.
-        let (cw, ch) = compute_cell_size(config, &glyph_cache.font_metrics());
+        let (cw, ch) = compute_cell_size(&font, &glyph_cache.font_metrics());
 
         Ok((glyph_cache, cw, ch))
     }
 
-    /// Update font size and cell dimensions.
-    fn update_glyph_cache(&mut self, config: &Config, font: &Font) {
+    /// Update font size and cell dimensions
+    fn update_glyph_cache(&mut self, font: &Font) {
         let size_info = &mut self.size_info;
         let cache = &mut self.glyph_cache;
 
+        let font_clone = font.clone();
         self.renderer.with_loader(|mut api| {
-            let _ = cache.update_font_size(font, size_info.dpr, &mut api);
+            let _ = cache.update_font_size(&font_clone, size_info.dpr, &mut api);
         });
 
-        // Update cell size.
-        let (cell_width, cell_height) = compute_cell_size(config, &self.glyph_cache.font_metrics());
+        // Update cell size
+        let (cell_width, cell_height) = compute_cell_size(font, &self.glyph_cache.font_metrics());
         size_info.cell_width = cell_width;
         size_info.cell_height = cell_height;
     }
@@ -386,7 +389,7 @@ impl Display {
     {
         // Update font size and cell dimensions.
         if let Some(font) = update_pending.font() {
-            self.update_glyph_cache(config, font);
+            self.update_glyph_cache(font);
         } else if update_pending.cursor_dirty() {
             self.clear_glyph_cache();
         }
@@ -717,9 +720,9 @@ fn dynamic_padding(padding: f32, dimension: f32, cell_dimension: f32) -> f32 {
 
 /// Calculate the cell dimensions based on font metrics.
 #[inline]
-fn compute_cell_size(config: &Config, metrics: &crossfont::Metrics) -> (f32, f32) {
-    let offset_x = f64::from(config.ui_config.font.offset.x);
-    let offset_y = f64::from(config.ui_config.font.offset.y);
+fn compute_cell_size(font: &Font, metrics: &crossfont::Metrics) -> (f32, f32) {
+    let offset_x = f64::from(font.offset.x);
+    let offset_y = f64::from(font.offset.y);
     (
         ((metrics.average_advance + offset_x) as f32).floor().max(1.),
         ((metrics.line_height + offset_y) as f32).floor().max(1.),

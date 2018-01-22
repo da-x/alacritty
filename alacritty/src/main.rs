@@ -136,7 +136,8 @@ fn run(window_event_loop: GlutinEventLoop<Event>, config: Config) -> Result<(), 
     // Create a display.
     //
     // The display manages a window and can draw the terminal.
-    let display = Display::new(&config, &window_event_loop)?;
+    let font_size = config.ui_config.font(&config.ui_config.basic_font().size).size;
+    let display = Display::new(&config, font_size, &window_event_loop)?;
 
     info!("PTY dimensions: {:?} x {:?}", display.size_info.lines(), display.size_info.cols());
 
