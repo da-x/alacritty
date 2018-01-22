@@ -378,6 +378,27 @@ impl<'de> Deserialize<'de> for Decorations {
     }
 }
 
+#[derive(Debug, Deserialize, Eq, PartialEq)]
+pub struct SmallFontConfig {
+    /// Font configuration
+    #[serde(default)]
+    font: Font,
+
+    // Font size in points
+    #[serde(deserialize_with="DeserializeSize::deserialize")]
+    pub upper_bound: Size,
+}
+
+impl SmallFontConfig {
+    pub fn check_bound(&self, size: Size) -> Option<&Font> {
+        if size <= self.upper_bound {
+            Some(&self.font)
+        } else {
+            None
+        }
+    }
+}
+
 #[serde(default)]
 #[derive(Debug, Copy, Clone, Deserialize, PartialEq, Eq)]
 pub struct WindowConfig {
@@ -462,6 +483,10 @@ pub struct Config {
     /// Font configuration
     #[serde(default, deserialize_with = "failure_default")]
     font: Font,
+
+    /// Small font configuration
+    #[serde(default)]
+    small_font: Option<SmallFontConfig>,
 
     /// Should show render timer
     #[serde(default, deserialize_with = "failure_default")]
@@ -1717,6 +1742,12 @@ impl Config {
     #[inline]
     pub fn font(&self) -> &Font {
         &self.font
+    }
+
+    /// Get font config
+    #[inline]
+    pub fn small_font(&self) -> &Option<SmallFontConfig> {
+        &self.small_font
     }
 
     /// Get window dimensions
