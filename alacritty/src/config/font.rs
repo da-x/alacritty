@@ -110,7 +110,7 @@ impl SecondaryFontDescription {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Size(FontSize);
+pub struct Size(pub FontSize);
 
 impl Default for Size {
     fn default() -> Self {

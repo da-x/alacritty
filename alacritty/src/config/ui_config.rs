@@ -5,17 +5,48 @@ use serde::{Deserialize, Deserializer};
 
 use alacritty_config_derive::ConfigDeserialize;
 use alacritty_terminal::config::{Percentage, LOG_TARGET_CONFIG};
-
+use crossfont::Size as FontSize;
 use crate::config::bindings::{self, Binding, KeyBinding, MouseBinding};
 use crate::config::debug::Debug;
-use crate::config::font::Font;
+use crate::config::font::{Size, Font};
 use crate::config::mouse::Mouse;
 use crate::config::window::WindowConfig;
+
+#[derive(ConfigDeserialize, Debug, PartialEq, Default)]
+pub struct SmallFontSize {
+    pub size: Size,
+}
+
+#[derive(ConfigDeserialize, Debug, PartialEq, Default)]
+pub struct SmallFontConfig {
+    font: Font,
+
+    // Font size in points
+    pub upper_bound: Option<SmallFontSize>,
+}
+
+impl SmallFontConfig {
+    pub fn check_bound(&self, size: FontSize) -> Option<&Font> {
+        match &self.upper_bound {
+            Some(upper_bound) => {
+                if size <= upper_bound.size.0 {
+                    Some(&self.font)
+                } else {
+                    None
+                }
+            }
+            None => None,
+        }
+    }
+}
 
 #[derive(ConfigDeserialize, Debug, PartialEq)]
 pub struct UIConfig {
     /// Font configuration.
     pub font: Font,
+
+    /// Font configuration
+    small_font: Option<SmallFontConfig>,
 
     /// Window configuration.
     pub window: WindowConfig,
@@ -54,6 +85,7 @@ impl Default for UIConfig {
             window: Default::default(),
             mouse: Default::default(),
             debug: Default::default(),
+            small_font: Default::default(),
             config_paths: Default::default(),
             key_bindings: Default::default(),
             mouse_bindings: Default::default(),
@@ -71,6 +103,24 @@ impl UIConfig {
     #[inline]
     pub fn key_bindings(&self) -> &[KeyBinding] {
         &self.key_bindings.0.as_slice()
+    }
+
+    /// Return font to use
+    #[inline]
+    pub fn font(&self, size: &FontSize) -> &Font {
+        match &self.small_font {
+            &None => &self.font,
+            &Some(ref small_font_config) => match small_font_config.check_bound(*size) {
+                None => &self.font,
+                Some(small_font) => small_font,
+            },
+        }
+    }
+
+    /// Return the basic font to use
+    #[inline]
+    pub fn basic_font(&self) -> &Font {
+        &self.font
     }
 
     #[inline]
