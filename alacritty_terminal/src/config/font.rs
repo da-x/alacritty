@@ -1,6 +1,6 @@
 use std::fmt;
 
-use font::Size;
+pub use font::Size;
 use log::error;
 use serde::de::Visitor;
 use serde::{Deserialize, Deserializer};
@@ -151,7 +151,7 @@ impl SecondaryFontDescription {
     }
 }
 
-trait DeserializeSize: Sized {
+pub trait DeserializeSize: Sized {
     fn deserialize<'a, D>(_: D) -> ::std::result::Result<Self, D::Error>
     where
         D: serde::de::Deserializer<'a>;
