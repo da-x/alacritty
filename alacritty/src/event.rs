@@ -227,14 +227,14 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn change_font_size(&mut self, delta: f32) {
         *self.font_size = max(*self.font_size + delta, Size::new(FONT_SIZE_STEP));
-        let font = self.config.font.clone().with_size(*self.font_size);
+        let font = self.config.font(self.font_size).clone().with_size(*self.font_size);
         self.display_update_pending.font = Some(font);
         self.terminal.dirty = true;
     }
 
     fn reset_font_size(&mut self) {
-        *self.font_size = self.config.font.size;
-        self.display_update_pending.font = Some(self.config.font.clone());
+        *self.font_size = self.config.basic_font().size;
+        self.display_update_pending.font = Some(self.config.font(&self.font_size).clone());
         self.terminal.dirty = true;
     }
 
@@ -337,7 +337,7 @@ impl<N: Notify + OnResize> Processor<N> {
             received_count: 0,
             suppress_chars: false,
             modifiers: Default::default(),
-            font_size: config.font.size,
+            font_size: config.font(&config.basic_font().size).size,
             config,
             message_buffer,
             display,
@@ -471,7 +471,8 @@ impl<N: Notify + OnResize> Processor<N> {
 
                     // Push current font to update its DPR
                     display_update_pending.font =
-                        Some(processor.ctx.config.font.clone().with_size(*processor.ctx.font_size));
+                        Some(processor.ctx.config.font(processor.ctx.font_size)
+                            .clone().with_size(*processor.ctx.font_size));
 
                     // Resize to event's dimensions, since no resize event is emitted on Wayland
                     display_update_pending.dimensions = Some(PhysicalSize::new(width, height));
@@ -494,13 +495,14 @@ impl<N: Notify + OnResize> Processor<N> {
 
                         processor.ctx.terminal.update_config(&config);
 
-                        if processor.ctx.config.font != config.font {
+                        if processor.ctx.config.basic_font() != config.basic_font() {
                             // Do not update font size if it has been changed at runtime
-                            if *processor.ctx.font_size == processor.ctx.config.font.size {
-                                *processor.ctx.font_size = config.font.size;
+                            if *processor.ctx.font_size == processor.ctx.config.basic_font().size {
+                                *processor.ctx.font_size = config.basic_font().size;
                             }
 
-                            let font = config.font.clone().with_size(*processor.ctx.font_size);
+                            let font = config.font(processor.ctx.font_size)
+                                .clone().with_size(*processor.ctx.font_size);
                             processor.ctx.display_update_pending.font = Some(font);
                         }
 
