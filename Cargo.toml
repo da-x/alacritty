@@ -112,3 +112,4 @@ maintainer-scripts = "debian"
 
 [patch.crates-io]
 servo-freetype-sys = { path = "servo-freetype-proxy" }
+winit = { git = "https://github.com/da-x/winit", branch = "issue-705" }
