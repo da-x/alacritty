@@ -14,6 +14,7 @@
 
 //! The display subsystem including window management, font rasterization, and
 //! GPU drawing.
+use std::collections::BTreeMap;
 use std::f64;
 use std::sync::mpsc;
 
@@ -30,7 +31,7 @@ use crate::renderer::rects::{Rect, Rects};
 use crate::renderer::{self, GlyphCache, QuadRenderer};
 use crate::sync::FairMutex;
 use crate::term::color::Rgb;
-use crate::term::{RenderableCell, SizeInfo, Term};
+use crate::term::{RenderableCell, SizeInfo, Term, UsableFontInfo};
 use crate::window::{self, Window};
 use font::{self, Rasterize};
 
@@ -96,7 +97,8 @@ impl From<renderer::Error> for Error {
 pub struct Display {
     window: Window,
     renderer: QuadRenderer,
-    glyph_cache: GlyphCache,
+    glyph_cache: BTreeMap<font::Size, (GlyphCache, f32, f32)>,
+    usable_font_info: UsableFontInfo,
     render_timer: bool,
     rx: mpsc::Receiver<PhysicalSize>,
     tx: mpsc::Sender<PhysicalSize>,
@@ -111,7 +113,7 @@ pub struct Notifier(window::Proxy);
 
 /// Types that are interested in when the display is resized
 pub trait OnResize {
-    fn on_resize(&mut self, size: &SizeInfo);
+    fn on_resize(&mut self, size: &SizeInfo, usable_font_info: Option<&UsableFontInfo>);
 }
 
 impl Notifier {
@@ -134,6 +136,11 @@ impl Display {
         &self.size_info
     }
 
+    /// Get size info about the display
+    pub fn usable_font_info(&self) -> &UsableFontInfo {
+        &self.usable_font_info
+    }
+
     pub fn new(config: &Config, options: &cli::Options) -> Result<Display, Error> {
         // Extract some properties from config
         let render_timer = config.render_timer();
@@ -144,8 +151,8 @@ impl Display {
             event_loop.get_available_monitors().next().map(|m| m.get_hidpi_factor()).unwrap_or(1.);
 
         // Guess the target window dimensions
-        let metrics = GlyphCache::static_metrics(config, estimated_dpr as f32)?;
-        let (cell_width, cell_height) = Self::compute_cell_size(config, &metrics);
+        let metrics = GlyphCache::static_metrics(config, config.font(), estimated_dpr as f32)?;
+        let (cell_width, cell_height) = Self::compute_cell_size(config.font(), &metrics);
         let dimensions =
             Self::calculate_dimensions(config, options, estimated_dpr, cell_width, cell_height);
 
@@ -168,7 +175,7 @@ impl Display {
         let mut renderer = QuadRenderer::new()?;
 
         let (glyph_cache, cell_width, cell_height) =
-            Self::new_glyph_cache(dpr, &mut renderer, config)?;
+            Self::new_glyph_cache(dpr, &mut renderer, config.font(), config)?;
 
         let mut padding_x = f64::from(config.padding().x) * dpr;
         let mut padding_y = f64::from(config.padding().y) * dpr;
@@ -227,12 +234,17 @@ impl Display {
         Ok(Display {
             window,
             renderer,
-            glyph_cache,
+            glyph_cache: {
+                let mut map = BTreeMap::new();
+                map.insert(config.font().size(), (glyph_cache, cell_width, cell_height));
+                map
+            },
             render_timer,
             tx,
             rx,
             meter: Meter::new(),
             font_size: config.font().size(),
+            usable_font_info: Self::calculate_ufi_info(&config, estimated_dpr)?,
             size_info,
             last_message: None,
         })
@@ -270,9 +282,9 @@ impl Display {
     fn new_glyph_cache(
         dpr: f64,
         renderer: &mut QuadRenderer,
+        font: &crate::config::Font,
         config: &Config,
     ) -> Result<(GlyphCache, f32, f32), Error> {
-        let font = config.font().clone();
         let rasterizer = font::Rasterizer::new(dpr as f32, config.use_thin_strokes())?;
 
         // Initialize glyph cache
@@ -293,28 +305,64 @@ impl Display {
         // Need font metrics to resize the window properly. This suggests to me the
         // font metrics should be computed before creating the window in the first
         // place so that a resize is not needed.
-        let (cw, ch) = Self::compute_cell_size(config, &glyph_cache.font_metrics());
+        let (cw, ch) = Self::compute_cell_size(font, &glyph_cache.font_metrics());
 
         Ok((glyph_cache, cw, ch))
     }
 
-    pub fn update_glyph_cache(&mut self, config: &Config) {
-        let cache = &mut self.glyph_cache;
-        let dpr = self.size_info.dpr;
-        let size = self.font_size;
+    pub fn calculate_ufi_info(
+        config: &Config,
+        dpr: f64,
+    ) -> Result<UsableFontInfo, Error> {
+        let mut ufi = UsableFontInfo::new();
 
-        self.renderer.with_loader(|mut api| {
-            let _ = cache.update_font_size(config.font(), size, dpr, &mut api);
-        });
+        for i in 1..100 {
+            let size = font::Size::new(crate::input::FONT_SIZE_STEP * (i as f32));
+            let font = config.font().to_owned().with_size(size);
+            let metrics = GlyphCache::static_metrics(config, &font, dpr as f32)?;
+            let (cell_width, cell_height) = Self::compute_cell_size(&font, &metrics);
+            ufi.cell_sizes.insert(size, (cell_width, cell_height));
+        }
 
-        let (cw, ch) = Self::compute_cell_size(config, &cache.font_metrics());
-        self.size_info.cell_width = cw;
-        self.size_info.cell_height = ch;
+        Ok(ufi)
     }
 
-    fn compute_cell_size(config: &Config, metrics: &font::Metrics) -> (f32, f32) {
-        let offset_x = f64::from(config.font().offset().x);
-        let offset_y = f64::from(config.font().offset().y);
+    pub fn get_glyph_cache<'a>(multicache: &'a mut BTreeMap<font::Size, (GlyphCache, f32, f32)>,
+                               size_info: &SizeInfo,
+                               renderer: &mut QuadRenderer,
+                               config: &Config,
+                               font_size: font::Size) -> Result<&'a mut (GlyphCache, f32, f32), Error>
+    {
+        use std::collections::btree_map::Entry;
+
+        match multicache.entry(font_size) {
+            Entry::Vacant(v) => {
+                let font = config.font().to_owned().with_size(font_size);
+                Ok(v.insert(Self::new_glyph_cache(size_info.dpr, renderer, &font, config)?))
+            }
+            Entry::Occupied(o) => {
+                Ok(o.into_mut())
+            }
+        }
+    }
+
+    pub fn update_glyph_cache(&mut self, config: &Config) -> Result<(), Error> {
+        let dpr = self.size_info.dpr;
+        let size = self.font_size;
+        self.glyph_cache.clear();
+
+        let (_, cw, ch) = Self::get_glyph_cache(&mut self.glyph_cache, &self.size_info,
+                                                &mut self.renderer, config, size)?;
+        self.usable_font_info = Self::calculate_ufi_info(config, dpr)?;
+        self.size_info.cell_width = *cw;
+        self.size_info.cell_height = *ch;
+
+        Ok(())
+    }
+
+    fn compute_cell_size(font: &crate::config::Font, metrics: &font::Metrics) -> (f32, f32) {
+        let offset_x = f64::from(font.offset().x);
+        let offset_y = f64::from(font.offset().y);
         (
             f32::max(1., ((metrics.average_advance + offset_x) as f32).floor()),
             f32::max(1., ((metrics.line_height + offset_y) as f32).floor()),
@@ -383,7 +431,7 @@ impl Display {
         }
 
         if font_changed {
-            self.update_glyph_cache(config);
+            let _ = self.update_glyph_cache(config);
         }
 
         if let Some(psize) = new_size.take() {
@@ -407,8 +455,9 @@ impl Display {
             self.size_info.padding_y = padding_y.floor();
 
             let size = &self.size_info;
-            terminal.resize(size);
-            processor_resize_handle.on_resize(size);
+            let usable_font_info = &self.usable_font_info;
+            terminal.resize(size, usable_font_info);
+            processor_resize_handle.on_resize(size, Some(&usable_font_info));
 
             // Subtract message bar lines for pty size
             let mut pty_size = *size;
@@ -417,7 +466,7 @@ impl Display {
             }
 
             if previous_cols != size.cols() || previous_lines != size.lines() {
-                pty_resize_handle.on_resize(&pty_size);
+                pty_resize_handle.on_resize(&pty_size, Some(&usable_font_info));
             }
 
             self.window.resize(psize);
@@ -435,11 +484,24 @@ impl Display {
         let size_info = *terminal.size_info();
         let visual_bell_intensity = terminal.visual_bell.intensity();
         let background_color = terminal.background_color();
-        let metrics = self.glyph_cache.font_metrics();
+
+        let metrics = Self::get_glyph_cache(&mut self.glyph_cache, &self.size_info,
+              &mut self.renderer, config, self.font_size).unwrap().0.font_metrics();
 
         let window_focused = self.window.is_focused;
         let grid_cells: Vec<RenderableCell> =
-            terminal.renderable_cells(config, window_focused, metrics).collect();
+            terminal.renderable_cells(config, config.font(), window_focused, metrics).filter(|cell| {
+                for zoom in &terminal.zooms {
+                    if cell.line.0 >= zoom.top_row as usize
+                        && cell.line.0 < (zoom.top_row + zoom.new_nr_rows) as usize
+                        && cell.column.0 >= zoom.left_col as usize
+                        && cell.column.0 < (zoom.left_col + zoom.new_nr_cols) as usize
+                    {
+                        return false;
+                    }
+                }
+                true
+        }).collect();
 
         // Get message from terminal to ignore modifications after lock is dropped
         let message_buffer = terminal.message_buffer_mut().message();
@@ -463,6 +525,27 @@ impl Display {
             }
         }
 
+        let zooms = terminal.zooms.clone();
+        let mut zoom_cells = vec![];
+
+        for zoom in &zooms {
+            let font_size = font::Size::new(zoom.font_size);
+            let font = config.font().to_owned().with_size(font_size);
+            let (glyph_cache, _, _) = Self::get_glyph_cache(&mut self.glyph_cache, &size_info,
+                    &mut self.renderer, config, font_size).unwrap();
+            let metrics = glyph_cache.font_metrics();
+
+            let grid_cells: Vec<RenderableCell> =
+                terminal.renderable_cells(config, &font, window_focused, metrics).filter(|cell| {
+                    cell.line.0 >= zoom.top_row as usize
+                        && cell.line.0 < (zoom.top_row + zoom.new_nr_rows) as usize
+                        && cell.column.0 >= zoom.left_col as usize
+                        && cell.column.0 < (zoom.left_col + zoom.new_nr_cols) as usize
+            }).collect();
+
+            zoom_cells.push(grid_cells);
+        }
+
         // Clear when terminal mutex isn't held. Mesa for
         // some reason takes a long time to call glClear(). The driver descends
         // into xcb_connect_to_fd() which ends up calling __poll_nocancel()
@@ -478,27 +561,98 @@ impl Display {
             api.clear(background_color);
         });
 
+        let font_size = self.font_size;
+
         {
-            let glyph_cache = &mut self.glyph_cache;
-            let mut rects = Rects::new(&metrics, &size_info);
+            let mut extra_rects = vec![];
 
             // Draw grid
+            let mut rects = Rects::new(&metrics, &size_info);
+
             {
+                let (glyph_cache, _, _) = Self::get_glyph_cache(&mut self.glyph_cache, &self.size_info,
+                    &mut self.renderer, config, self.font_size).unwrap();
                 let _sampler = self.meter.sampler();
 
                 self.renderer.with_api(config, &size_info, |mut api| {
                     // Iterate over all non-empty cells in the grid
-                    for cell in grid_cells {
+                    for cell in &grid_cells {
                         // Update underline/strikeout
-                        rects.update_lines(&size_info, &cell);
+                        rects.update_lines(&size_info, &cell, (0.0, 0.0));
 
                         // Draw the cell
-                        api.render_cell(cell, glyph_cache);
+                        api.render_cell(cell.clone(), glyph_cache, (0.0, 0.0));
                     }
                 });
             }
 
+            // Draw zoomed grids
+            for (zoom_idx, zoom) in zooms.iter().enumerate() {
+                let _sampler = self.meter.sampler();
+                let main_size_info = &size_info;
+                let rect_y_start = zoom.top_row;
+                let rect_x_start = zoom.left_col;
+                let rect_y_lines = zoom.new_nr_rows;
+                let rect_x_cols = zoom.new_nr_cols;
+                let rect_orig_y_lines = zoom.nr_rows;
+                let rect_orig_x_cols = zoom.nr_cols;
+
+                let font_size = font::Size::new(zoom.font_size);
+                let (glyph_cache, cw, ch) = Self::get_glyph_cache(&mut self.glyph_cache, &main_size_info,
+                    &mut self.renderer, config, font_size).unwrap();
+                let mut size_info = size_info.clone();
+                size_info.cell_width = *cw;
+                size_info.cell_height = *ch;
+
+                let zoom_offset = (
+                    main_size_info.padding_x + rect_x_start as f32 * main_size_info.cell_width,
+                    main_size_info.padding_y + rect_y_start as f32 * main_size_info.cell_height,
+                );
+                self.renderer.draw_rects(config, visual_bell_intensity, {
+                    let mut rects = Rects::new(&metrics, &size_info);
+                    let rect = Rect::new(
+                        zoom_offset.0,
+                        zoom_offset.1,
+                        rect_orig_x_cols as f32 * main_size_info.cell_width,
+                        rect_orig_y_lines as f32 * main_size_info.cell_height,
+                    );
+                    rects.push(rect, background_color);
+                    rects
+                });
+
+                let text_padding_offset = (
+                    (((rect_orig_x_cols as f32 * main_size_info.cell_width) -
+                      (rect_x_cols as f32 * size_info.cell_width)) / 2.0).floor(),
+                    (((rect_orig_y_lines as f32 * main_size_info.cell_height) -
+                      (rect_y_lines as f32 * size_info.cell_height)) / 2.0).floor()
+                );
+
+                let text_zoom_offset = (
+                    zoom_offset.0 + text_padding_offset.0,
+                    zoom_offset.1 + text_padding_offset.1,
+                );
+
+                let mut rects = Rects::new(&glyph_cache.font_metrics(), &size_info);
+
+                self.renderer.with_api(config, &size_info, |mut api| {
+                    for cell in &zoom_cells[zoom_idx] {
+                        let mut cell = cell.clone();
+                        cell.line.0 -= rect_y_start as usize;
+                        cell.column.0 -= rect_x_start as usize;
+
+                        // Update underline/strikeout
+                        rects.update_lines(&size_info, &cell, text_zoom_offset);
+
+                        // Draw the cell
+                        api.render_cell(cell.clone(), glyph_cache, text_zoom_offset);
+                    }
+                });
+
+                extra_rects.push(rects);
+            }
+
             if let Some(message) = message_buffer {
+                let (glyph_cache, _, _) = self.glyph_cache.get_mut(&font_size).unwrap();
                 let text = message.text(&size_info);
 
                 // Create a new rectangle for the background
@@ -508,7 +662,10 @@ impl Display {
                 rects.push(rect, message.color());
 
                 // Draw rectangles including the new background
-                self.renderer.draw_rects(config, &size_info, visual_bell_intensity, rects);
+                self.renderer.draw_rects(config, visual_bell_intensity, rects);
+                for rects in extra_rects {
+                    self.renderer.draw_rects(config, visual_bell_intensity, rects);
+                }
 
                 // Relay messages to the user
                 let mut offset = 1;
@@ -525,11 +682,15 @@ impl Display {
                 }
             } else {
                 // Draw rectangles
-                self.renderer.draw_rects(config, &size_info, visual_bell_intensity, rects);
+                self.renderer.draw_rects(config, visual_bell_intensity, rects);
+                for rects in extra_rects {
+                    self.renderer.draw_rects(config, visual_bell_intensity, rects);
+                }
             }
 
             // Draw render timer
             if self.render_timer {
+                let (glyph_cache, _, _) = self.glyph_cache.get_mut(&font_size).unwrap();
                 let timing = format!("{:.3} usec", self.meter.average());
                 let color = Rgb { r: 0xd5, g: 0x4e, b: 0x53 };
                 self.renderer.with_api(config, &size_info, |mut api| {

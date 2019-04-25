@@ -888,6 +888,8 @@ impl<'a> de::Deserialize<'a> for ActionWrapper {
                     "PasteSelection" => Action::PasteSelection,
                     "IncreaseFontSize" => Action::IncreaseFontSize,
                     "DecreaseFontSize" => Action::DecreaseFontSize,
+                    "IncreasePaneFontSize" => Action::IncreasePaneFontSize,
+                    "DecreasePaneFontSize" => Action::DecreasePaneFontSize,
                     "ResetFontSize" => Action::ResetFontSize,
                     "ScrollPageUp" => Action::ScrollPageUp,
                     "ScrollPageDown" => Action::ScrollPageDown,

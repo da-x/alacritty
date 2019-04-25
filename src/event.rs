@@ -23,7 +23,7 @@ use crate::input::{self, KeyBinding, MouseBinding};
 use crate::selection::Selection;
 use crate::sync::FairMutex;
 use crate::term::cell::Cell;
-use crate::term::{SizeInfo, Term};
+use crate::term::{SizeInfo, UsableFontInfo, Term};
 #[cfg(unix)]
 use crate::tty;
 use crate::util::fmt::Red;
@@ -42,6 +42,7 @@ pub struct ActionContext<'a, N> {
     pub notifier: &'a mut N,
     pub terminal: &'a mut Term,
     pub size_info: &'a mut SizeInfo,
+    pub usable_font_info: &'a UsableFontInfo,
     pub mouse: &'a mut Mouse,
     pub received_count: &'a mut usize,
     pub suppress_chars: &'a mut bool,
@@ -54,6 +55,28 @@ impl<'a, N: Notify + 'a> input::ActionContext for ActionContext<'a, N> {
         self.notifier.notify(val);
     }
 
+    fn pane_font_size_step(&mut self, change: i8) {
+        let mut v = Vec::from(&b"\x1b[?z-"[..]);
+        v.extend(format!("{}",
+            self.terminal.font_size.as_f32_pts()).into_bytes());
+        for (size, (r, c)) in self.usable_font_info.cell_sizes.iter() {
+            v.extend(format!(":{}/{}/{}", size.as_f32_pts(), r, c).into_bytes());
+        }
+        v.extend(b"?");
+        self.write_to_pty(Cow::Owned(v));
+
+        match change {
+            -1 => {
+                self.write_to_pty(&b"\x1b[?z0"[..]);
+            }
+            1 => {
+                self.write_to_pty(&b"\x1b[?z1"[..]);
+            }
+            _ => {
+            }
+        }
+    }
+
     fn size_info(&self) -> SizeInfo {
         *self.size_info
     }
@@ -63,10 +86,10 @@ impl<'a, N: Notify + 'a> input::ActionContext for ActionContext<'a, N> {
 
         if let ElementState::Pressed = self.mouse().left_button_state {
             let (x, y) = (self.mouse().x, self.mouse().y);
-            let size_info = self.size_info();
-            let point = size_info.pixels_to_coords(x, y);
-            let cell_side = self.mouse().cell_side;
-            self.update_selection(Point { line: point.line, col: point.col }, cell_side);
+            if let Some(point) = self.terminal().pixels_to_coords(x, y) {
+                let cell_side = self.mouse().cell_side;
+                self.update_selection(Point { line: point.line, col: point.col }, cell_side);
+            }
         }
     }
 
@@ -272,6 +295,7 @@ pub struct Processor<N> {
     resize_tx: mpsc::Sender<PhysicalSize>,
     ref_test: bool,
     size_info: SizeInfo,
+    usable_font_info: UsableFontInfo,
     hide_mouse_when_typing: bool,
     hide_mouse: bool,
     received_count: usize,
@@ -287,8 +311,14 @@ pub struct Processor<N> {
 ///
 /// Currently this just forwards the notice to the input processor.
 impl<N> OnResize for Processor<N> {
-    fn on_resize(&mut self, size: &SizeInfo) {
+    fn on_resize(&mut self, size: &SizeInfo, usable_font_info: Option<&UsableFontInfo>) {
         self.size_info = size.to_owned();
+        match usable_font_info {
+            None => {},
+            Some(usable_font_info) => {
+                self.usable_font_info = usable_font_info.to_owned();
+            }
+        }
     }
 }
 
@@ -303,6 +333,7 @@ impl<N: Notify> Processor<N> {
         options: &Options,
         config: &Config,
         ref_test: bool,
+        usable_font_info: UsableFontInfo,
         size_info: SizeInfo,
     ) -> Processor<N> {
         Processor {
@@ -326,6 +357,7 @@ impl<N: Notify> Processor<N> {
             window_changes: Default::default(),
             save_to_clipboard: config.selection().save_to_clipboard,
             alt_send_esc: config.alt_send_esc(),
+            usable_font_info,
         }
     }
 
@@ -492,6 +524,7 @@ impl<N: Notify> Processor<N> {
                 notifier: &mut self.notifier,
                 mouse: &mut self.mouse,
                 size_info: &mut self.size_info,
+                usable_font_info: &mut self.usable_font_info,
                 received_count: &mut self.received_count,
                 suppress_chars: &mut self.suppress_chars,
                 last_modifiers: &mut self.last_modifiers,

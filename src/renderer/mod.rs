@@ -268,9 +268,7 @@ impl GlyphCache {
     }
 
     pub fn font_metrics(&self) -> font::Metrics {
-        self.rasterizer
-            .metrics(self.font_key, self.font_size)
-            .expect("metrics load since font is loaded at glyph cache creation")
+        self.metrics
     }
 
     pub fn get<'a, L>(&'a mut self, glyph_key: GlyphKey, loader: &mut L) -> &'a Glyph
@@ -331,9 +329,7 @@ impl GlyphCache {
     // Calculate font metrics without access to a glyph cache
     //
     // This should only be used *before* OpenGL is initialized and the glyph cache can be filled.
-    pub fn static_metrics(config: &Config, dpr: f32) -> Result<font::Metrics, font::Error> {
-        let font = config.font().clone();
-
+    pub fn static_metrics(config: &Config, font: &config::Font, dpr: f32) -> Result<font::Metrics, font::Error> {
         let mut rasterizer = font::Rasterizer::new(dpr, config.use_thin_strokes())?;
         let regular_desc =
             GlyphCache::make_desc(&font.normal(), font::Slant::Normal, font::Weight::Normal);
@@ -371,6 +367,9 @@ struct InstanceData {
     bg_g: f32,
     bg_b: f32,
     bg_a: f32,
+    // zoom offset
+    zoom_offset_x: f32,
+    zoom_offset_y: f32,
 }
 
 #[derive(Debug)]
@@ -424,7 +423,7 @@ impl Batch {
         Batch { tex: 0, instances: Vec::with_capacity(BATCH_MAX) }
     }
 
-    pub fn add_item(&mut self, cell: &RenderableCell, glyph: &Glyph) {
+    pub fn add_item(&mut self, cell: &RenderableCell, glyph: &Glyph, zoom_offset: (f32, f32)) {
         if self.is_empty() {
             self.tex = glyph.tex_id;
         }
@@ -432,6 +431,9 @@ impl Batch {
         self.instances.push(InstanceData {
             col: cell.column.0 as f32,
             row: cell.line.0 as f32,
+
+            zoom_offset_x: zoom_offset.0,
+            zoom_offset_y: zoom_offset.1,
 
             top: glyph.top,
             left: glyph.left,
@@ -594,6 +596,17 @@ impl QuadRenderer {
             );
             gl::EnableVertexAttribArray(4);
             gl::VertexAttribDivisor(4, 1);
+            // zoom offset
+            gl::VertexAttribPointer(
+                5,
+                2,
+                gl::FLOAT,
+                gl::FALSE,
+                size_of::<InstanceData>() as i32,
+                (17 * size_of::<f32>()) as *const _,
+            );
+            gl::EnableVertexAttribArray(5);
+            gl::VertexAttribDivisor(5, 1);
 
             // Rectangle setup
             gl::GenVertexArrays(1, &mut rect_vao);
@@ -671,17 +684,19 @@ impl QuadRenderer {
     pub fn draw_rects(
         &mut self,
         config: &Config,
-        props: &term::SizeInfo,
         visual_bell_intensity: f64,
         cell_line_rects: Rects,
     ) {
+        let props = cell_line_rects.size();
+
         // Swap to rectangle rendering program
         unsafe {
             // Swap program
             gl::UseProgram(self.rect_program.id);
 
             // Remove padding from viewport
-            gl::Viewport(0, 0, props.width as i32, props.height as i32);
+            gl::Viewport(0, 0,
+                         props.width as i32, props.height as i32);
 
             // Change blending strategy
             gl::BlendFunc(gl::SRC_ALPHA, gl::ONE_MINUS_SRC_ALPHA);
@@ -963,18 +978,18 @@ impl<'a> RenderApi<'a> {
             .collect::<Vec<_>>();
 
         for cell in cells {
-            self.render_cell(cell, glyph_cache);
+            self.render_cell(cell, glyph_cache, (0.0, 0.0));
         }
     }
 
     #[inline]
-    fn add_render_item(&mut self, cell: &RenderableCell, glyph: &Glyph) {
+    fn add_render_item(&mut self, cell: &RenderableCell, glyph: &Glyph, zoom_offset: (f32, f32)) {
         // Flush batch if tex changing
         if !self.batch.is_empty() && self.batch.tex != glyph.tex_id {
             self.render_batch();
         }
 
-        self.batch.add_item(cell, glyph);
+        self.batch.add_item(cell, glyph, zoom_offset);
 
         // Render batch and clear if it's full
         if self.batch.full() {
@@ -982,12 +997,12 @@ impl<'a> RenderApi<'a> {
         }
     }
 
-    pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache) {
+    pub fn render_cell(&mut self, cell: RenderableCell, glyph_cache: &mut GlyphCache, zoom_offset: (f32, f32)) {
         let chars = match cell.inner {
             RenderableCellContent::Raw(ref raw) => {
                 // Raw cell pixel buffers like cursors don't need to go through font lookup
                 let glyph = self.load_glyph(raw);
-                self.add_render_item(&cell, &glyph);
+                self.add_render_item(&cell, &glyph, zoom_offset);
                 return;
             },
             RenderableCellContent::Chars(chars) => chars,
@@ -1019,7 +1034,7 @@ impl<'a> RenderApi<'a> {
 
         // Add cell to batch
         let glyph = glyph_cache.get(glyph_key, self);
-        self.add_render_item(&cell, glyph);
+        self.add_render_item(&cell, glyph, zoom_offset);
 
         // Render zero-width characters
         for c in (&chars[1..]).iter().filter(|c| **c != ' ') {
@@ -1033,7 +1048,7 @@ impl<'a> RenderApi<'a> {
             // anchor has been moved to the right by one cell.
             glyph.left += glyph_cache.metrics.average_advance as f32;
 
-            self.add_render_item(&cell, &glyph);
+            self.add_render_item(&cell, &glyph, zoom_offset);
         }
     }
 }
@@ -1612,5 +1627,13 @@ impl Atlas {
         self.row_tallest = 0;
 
         Ok(())
+    }
+}
+
+impl Drop for Atlas {
+    fn drop(&mut self) {
+        unsafe {
+            gl::DeleteTextures(1, &mut self.id);
+        }
     }
 }
