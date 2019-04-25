@@ -84,6 +84,7 @@ pub trait ActionContext {
     fn toggle_fullscreen(&mut self);
     #[cfg(target_os = "macos")]
     fn toggle_simple_fullscreen(&mut self);
+    fn pane_font_size_step(&mut self, change: i8);
 }
 
 /// Describes a state and action to take in that state
@@ -214,6 +215,12 @@ pub enum Action {
     /// Decrease font size
     DecreaseFontSize,
 
+    /// Increase pane font size
+    IncreasePaneFontSize,
+
+    /// Decrease pane font size
+    DecreasePaneFontSize,
+
     /// Reset font size to the config value
     ResetFontSize,
 
@@ -329,10 +336,18 @@ impl Action {
             },
             Action::IncreaseFontSize => {
                 ctx.terminal_mut().change_font_size(FONT_SIZE_STEP);
+                ctx.pane_font_size_step(0);
             },
             Action::DecreaseFontSize => {
                 ctx.terminal_mut().change_font_size(-FONT_SIZE_STEP);
-            },
+                ctx.pane_font_size_step(0);
+            }
+            Action::IncreasePaneFontSize => {
+                ctx.pane_font_size_step(1);
+            }
+            Action::DecreasePaneFontSize => {
+                ctx.pane_font_size_step(-1);
+            }
             Action::ResetFontSize => {
                 ctx.terminal_mut().reset_font_size();
             },
@@ -412,7 +427,11 @@ impl<'a, A: ActionContext + 'a> Processor<'a, A> {
         self.ctx.mouse_mut().y = y;
 
         let size_info = self.ctx.size_info();
-        let point = size_info.pixels_to_coords(x, y);
+        let point = if let Some(point) = self.ctx.terminal().pixels_to_coords(x, y) {
+            point
+        } else {
+            return;
+        };
 
         let cell_side = self.get_mouse_side();
         let prev_side = mem::replace(&mut self.ctx.mouse_mut().cell_side, cell_side);
@@ -1031,6 +1050,8 @@ mod tests {
         fn size_info(&self) -> SizeInfo {
             *self.size_info
         }
+
+        fn pane_font_size_step(&mut self, _change: i8) {}
 
         fn semantic_selection(&mut self, _point: Point) {
             // set something that we can check for here

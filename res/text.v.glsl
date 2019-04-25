@@ -27,6 +27,9 @@ layout (location = 3) in vec3 textColor;
 // Background color
 layout (location = 4) in vec4 backgroundColor;
 
+// Zoom offset
+layout (location = 5) in vec2 zoomOffset;
+
 out vec2 TexCoords;
 flat out vec3 fg;
 flat out vec4 bg;
@@ -49,7 +52,7 @@ void main()
     position.y = (gl_VertexID == 0 || gl_VertexID == 3) ? 0. : 1.;
 
     // Position of cell from top-left
-    vec2 cellPosition = cellDim * gridCoords;
+    vec2 cellPosition = cellDim * gridCoords + zoomOffset;
 
     if (backgroundPass != 0) {
         vec2 finalPosition = cellPosition + cellDim * position;

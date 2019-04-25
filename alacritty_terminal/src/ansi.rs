@@ -23,6 +23,7 @@ use glutin::MouseCursor;
 use vte;
 
 use crate::term::color::Rgb;
+use crate::term::Zoom;
 
 // Parse color arguments
 //
@@ -340,6 +341,9 @@ pub trait Handler {
 
     /// Run the dectest routine
     fn dectest(&mut self) {}
+
+    /// Set zooms
+    fn set_zooms(&mut self, _: Vec<Zoom>) {}
 }
 
 /// Describes shape of cursor
@@ -884,6 +888,37 @@ where
 
             // Reset text cursor color
             b"112" => self.handler.reset_color(NamedColor::Cursor as usize),
+
+            // Frame zoom data
+            b"212" => {
+                use regex::Regex;
+                use std::str::FromStr;
+
+                lazy_static! {
+                    static ref RE: Regex =
+                        Regex::new(
+                            r"(\d*),(\d*),(\d*),(\d*):(\d*),(\d*)/([0-9.]+)").unwrap();
+                }
+
+                let mut v = vec![];
+                for param in params {
+                    let param_str = String::from_utf8_lossy(param);
+                    for cap in RE.captures_iter(param_str.as_ref()) {
+                        let zoom = Zoom {
+                            left_col: FromStr::from_str(cap.get(1).unwrap().as_str()).unwrap(),
+                            top_row: FromStr::from_str(cap.get(2).unwrap().as_str()).unwrap(),
+                            nr_cols: FromStr::from_str(cap.get(3).unwrap().as_str()).unwrap(),
+                            nr_rows: FromStr::from_str(cap.get(4).unwrap().as_str()).unwrap(),
+                            new_nr_cols: FromStr::from_str(cap.get(5).unwrap().as_str()).unwrap(),
+                            new_nr_rows: FromStr::from_str(cap.get(6).unwrap().as_str()).unwrap(),
+                            font_size: FromStr::from_str(cap.get(7).unwrap().as_str()).unwrap(),
+                        };
+                        v.push(zoom);
+                    }
+                }
+
+                self.handler.set_zooms(v);
+            }
 
             _ => unhandled(params),
         }

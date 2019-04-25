@@ -27,7 +27,7 @@ use winapi::um::winbase::WAIT_OBJECT_0;
 use crate::cli::Options;
 use crate::config::Config;
 use crate::display::OnResize;
-use crate::term::SizeInfo;
+use crate::term::{UsableFontInfo, SizeInfo};
 use crate::tty::{EventedPty, EventedReadWrite};
 
 mod conpty;
@@ -213,12 +213,12 @@ impl Write for EventedWritablePipe {
 }
 
 impl<'a> OnResize for PtyHandle<'a> {
-    fn on_resize(&mut self, sizeinfo: &SizeInfo) {
+    fn on_resize(&mut self, sizeinfo: &SizeInfo, cell_sizes: Option<&UsableFontInfo>) {
         match self {
             PtyHandle::Winpty(w) => w.resize(sizeinfo),
             PtyHandle::Conpty(c) => {
                 let mut handle = c.clone();
-                handle.on_resize(sizeinfo)
+                handle.on_resize(sizeinfo, cell_sizes)
             },
         }
     }

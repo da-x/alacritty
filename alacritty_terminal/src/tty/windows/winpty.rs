@@ -30,7 +30,7 @@ use winpty::{ConfigFlags, MouseMode, SpawnConfig, SpawnFlags, Winpty};
 use crate::cli::Options;
 use crate::config::{Config, Shell};
 use crate::display::OnResize;
-use crate::term::SizeInfo;
+use crate::term::{UsableFontInfo, SizeInfo};
 
 // We store a raw pointer because we need mutable access to call
 // on_resize from a separate thread. Winpty internally uses a mutex
@@ -59,7 +59,7 @@ impl<'a> Agent<'a> {
     pub fn resize(&self, size: &SizeInfo) {
         // This is safe since Winpty uses a mutex internally.
         unsafe {
-            (&mut *self.winpty).on_resize(size);
+            (&mut *self.winpty).on_resize(size, None);
         }
     }
 }
@@ -159,7 +159,7 @@ pub fn new<'a>(
 }
 
 impl<'a> OnResize for Winpty<'a> {
-    fn on_resize(&mut self, sizeinfo: &SizeInfo) {
+    fn on_resize(&mut self, sizeinfo: &SizeInfo, _cell_sizes: Option<&UsableFontInfo>) {
         let (cols, lines) = (sizeinfo.cols().0, sizeinfo.lines().0);
         if cols > 0 && cols <= u16::MAX as usize && lines > 0 && lines <= u16::MAX as usize {
             self.set_size(cols as u16, lines as u16)

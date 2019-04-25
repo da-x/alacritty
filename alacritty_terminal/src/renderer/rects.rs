@@ -45,17 +45,17 @@ impl Line {
 }
 
 /// Rects for underline, strikeout and more.
-pub struct Rects<'a> {
+pub struct Rects {
     inner: Vec<(Rect<f32>, Rgb)>,
     active_lines: Vec<Line>,
-    metrics: &'a Metrics,
-    size: &'a SizeInfo,
+    metrics: Metrics,
+    size: SizeInfo,
 }
 
-impl<'a> Rects<'a> {
-    pub fn new(metrics: &'a Metrics, size: &'a SizeInfo) -> Self {
+impl Rects {
+    pub fn new(metrics: &Metrics, size: &SizeInfo) -> Self {
         let active_lines = vec![Line::new(Flags::UNDERLINE), Line::new(Flags::STRIKEOUT)];
-        Self { inner: Vec::new(), active_lines, metrics, size }
+        Self { inner: Vec::new(), active_lines, metrics: metrics.clone(), size: size.clone() }
     }
 
     /// Convert the stored rects to rectangles for the renderer.
@@ -63,8 +63,16 @@ impl<'a> Rects<'a> {
         &self.inner
     }
 
+    pub fn size(&self) -> &SizeInfo {
+        &self.size
+    }
+
+    pub fn metrics(&self) -> &Metrics {
+        &self.metrics
+    }
+
     /// Update the stored lines with the next cell info.
-    pub fn update_lines(&mut self, size_info: &SizeInfo, cell: &RenderableCell) {
+    pub fn update_lines(&mut self, size_info: &SizeInfo, cell: &RenderableCell, offset: (f32, f32)) {
         for line in self.active_lines.iter_mut() {
             match line.range {
                 // Check for end if line is present
@@ -83,6 +91,7 @@ impl<'a> Rects<'a> {
                                 line.flag,
                                 &self.metrics,
                                 &self.size,
+                                offset,
                             ));
                         } else {
                             // Update the length of the line
@@ -92,7 +101,7 @@ impl<'a> Rects<'a> {
                         continue;
                     }
 
-                    self.inner.push(create_rect(start, *end, line.flag, &self.metrics, &self.size));
+                    self.inner.push(create_rect(start, *end, line.flag, &self.metrics, &self.size, offset));
 
                     // Start a new line if the flag is present
                     if cell.flags.contains(line.flag) {
@@ -126,6 +135,7 @@ fn create_rect(
     flag: Flags,
     metrics: &Metrics,
     size: &SizeInfo,
+    offset: (f32, f32),
 ) -> (Rect<f32>, Rgb) {
     let start_x = start.column.0 as f32 * size.cell_width;
     let end_x = (end.col.0 + 1) as f32 * size.cell_width;
@@ -150,7 +160,9 @@ fn create_rect(
     }
 
     let rect =
-        Rect::new(start_x + size.padding_x, y.round() + size.padding_y, width, height.round());
+        Rect::new(start_x + size.padding_x + offset.0,
+                  y.round() + size.padding_y + offset.1,
+                  width, height.round());
 
     (rect, start.fg)
 }

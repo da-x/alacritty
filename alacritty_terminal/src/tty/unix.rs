@@ -18,7 +18,7 @@
 use crate::cli::Options;
 use crate::config::{Config, Shell};
 use crate::display::OnResize;
-use crate::term::SizeInfo;
+use crate::term::{UsableFontInfo, SizeInfo};
 use crate::tty::{ChildEvent, EventedPty, EventedReadWrite};
 use mio;
 
@@ -380,7 +380,7 @@ impl<'a> ToWinsize for &'a SizeInfo {
 }
 
 impl OnResize for i32 {
-    fn on_resize(&mut self, size: &SizeInfo) {
+    fn on_resize(&mut self, size: &SizeInfo, _cell_sizes: Option<&UsableFontInfo>) {
         let win = size.to_winsize();
 
         let res = unsafe { libc::ioctl(*self, libc::TIOCSWINSZ, &win as *const _) };

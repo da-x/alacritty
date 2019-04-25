@@ -17,6 +17,7 @@ use std::cmp::{max, min};
 use std::ops::{Index, IndexMut, Range, RangeInclusive};
 use std::time::{Duration, Instant};
 use std::{io, mem, ptr};
+use std::collections::BTreeMap;
 
 use font::{self, RasterizedGlyph, Size};
 use glutin::MouseCursor;
@@ -26,7 +27,7 @@ use crate::ansi::{
     self, Attr, CharsetIndex, Color, CursorStyle, Handler, NamedColor, StandardCharset,
 };
 use crate::clipboard::{Clipboard, ClipboardType};
-use crate::config::{Config, VisualBellAnimation};
+use crate::config::{Config, VisualBellAnimation, Font};
 use crate::cursor;
 use crate::grid::{
     BidirectionalIterator, DisplayIter, Grid, GridCell, IndexRegion, Indexed, Scroll,
@@ -174,6 +175,7 @@ impl<'a> RenderableCellsIter<'a> {
     fn new<'b>(
         term: &'b Term,
         config: &'b Config,
+        font: &'b Font,
         selection: Option<Locations>,
         mut cursor_style: CursorStyle,
         metrics: font::Metrics,
@@ -229,8 +231,8 @@ impl<'a> RenderableCellsIter<'a> {
         let cursor = &term.cursor.point;
         let cursor_visible = term.mode.contains(TermMode::SHOW_CURSOR) && grid.contains(cursor);
         let cursor_cell = if cursor_visible {
-            let offset_x = config.font().offset().x;
-            let offset_y = config.font().offset().y;
+            let offset_x = font.offset().x;
+            let offset_y = font.offset().y;
 
             let is_wide = grid[cursor].flags.contains(cell::Flags::WIDE_CHAR)
                 && (cursor.col + 1) < grid.num_cols();
@@ -666,6 +668,17 @@ impl VisualBell {
     }
 }
 
+#[derive(Clone, Copy, Debug)]
+pub struct Zoom {
+    pub left_col: u32,
+    pub top_row: u32,
+    pub nr_cols: u32,
+    pub nr_rows: u32,
+    pub new_nr_cols: u32,
+    pub new_nr_rows: u32,
+    pub font_size: f32,
+}
+
 pub struct Term {
     /// The grid
     grid: Grid<Cell>,
@@ -714,10 +727,15 @@ pub struct Term {
     /// Size
     size_info: SizeInfo,
 
+    /// Font information
+    usable_font_info: UsableFontInfo,
+
     pub dirty: bool,
 
     pub visual_bell: VisualBell,
     pub next_is_urgent: Option<bool>,
+
+    pub zooms: Vec<Zoom>,
 
     /// Saved cursor from main grid
     cursor_save: Cursor,
@@ -809,6 +827,11 @@ impl SizeInfo {
         }
     }
 
+    pub fn coords_to_pixels(&self, point: Point) -> (usize, usize) {
+        ((point.col.0 as f32 * self.cell_width + self.padding_x) as usize,
+         (point.line.0 as f32 * self.cell_height + self.padding_y) as usize)
+    }
+
     pub fn pixels_to_coords(&self, x: usize, y: usize) -> Point {
         let col = Column(x.saturating_sub(self.padding_x as usize) / (self.cell_width as usize));
         let line = Line(y.saturating_sub(self.padding_y as usize) / (self.cell_height as usize));
@@ -817,6 +840,17 @@ impl SizeInfo {
             line: min(line, Line(self.lines().saturating_sub(1))),
             col: min(col, Column(self.cols().saturating_sub(1))),
         }
+    }
+}
+
+#[derive(Clone)]
+pub struct UsableFontInfo {
+    pub cell_sizes: BTreeMap<font::Size, (f32, f32)>,
+}
+
+impl UsableFontInfo {
+    pub fn new() -> Self {
+        Self { cell_sizes: BTreeMap::new() }
     }
 }
 
@@ -849,6 +883,7 @@ impl Term {
     pub fn new(
         config: &Config,
         size: SizeInfo,
+        usable_font_info: &UsableFontInfo,
         message_buffer: MessageBuffer,
         clipboard: Clipboard,
     ) -> Term {
@@ -872,12 +907,14 @@ impl Term {
             dirty: false,
             visual_bell: VisualBell::new(config),
             next_is_urgent: None,
+            zooms: vec![],
             input_needs_wrap: false,
             grid,
             alt_grid: alt,
             alt: false,
             font_size: config.font().size(),
             original_font_size: config.font().size(),
+            usable_font_info: usable_font_info.clone(),
             active_charset: Default::default(),
             cursor: Default::default(),
             cursor_save: Default::default(),
@@ -1077,7 +1114,50 @@ impl Term {
     /// padding pixels are considered inside the window
     pub fn pixels_to_coords(&self, x: usize, y: usize) -> Option<Point> {
         if self.size_info.contains_point(x, y, true) {
-            Some(self.size_info.pixels_to_coords(x, y))
+            let mut coords = self.size_info.pixels_to_coords(x, y);
+
+            for zoom in &self.zooms {
+                if !(coords.line.0 >= zoom.top_row as usize &&
+                     coords.line.0 < (zoom.top_row + zoom.nr_rows) as usize &&
+                     coords.col.0 >= zoom.left_col as usize &&
+                     coords.col.0 < (zoom.left_col + zoom.nr_cols) as usize)
+                {
+                    continue;
+                }
+
+                let font_size = font::Size::new(zoom.font_size);
+                if let Some((cell_width, cell_height)) =
+                    self.usable_font_info.cell_sizes.get(&font_size)
+                {
+                    let left_top = Point { line: Line(zoom.top_row as usize)
+                                         , col: Column(zoom.left_col as usize) };
+                    let (px, py) = self.size_info.coords_to_pixels(left_top);
+                    let (tx, ty) = (x.saturating_sub(px), y.saturating_sub(py));
+                    let total_width = zoom.nr_cols as f32 * self.size_info.cell_width;
+                    let total_height = zoom.nr_rows as f32 * self.size_info.cell_height;
+                    let inside_width = zoom.new_nr_cols as f32 * *cell_width;
+                    let inside_height = zoom.new_nr_rows as f32 * *cell_height;
+                    let padding_x = (total_width - inside_width) / 2.0;
+                    let padding_y = (total_height - inside_height) / 2.0;
+
+                    let inner_size_info = SizeInfo {
+                        width: total_width,
+                        height: total_height,
+                        cell_width: *cell_width,
+                        cell_height: *cell_height,
+                        padding_x: if padding_x >= 0.0 { padding_x } else { 0.0 },
+                        padding_y: if padding_y >= 0.0 { padding_y } else { 0.0 },
+                        dpr: self.size_info.dpr,
+                    };
+
+                    coords = inner_size_info.pixels_to_coords(tx, ty);
+                    coords.line.0 += left_top.line.0;
+                    coords.col.0 += left_top.col.0;
+                    break;
+                }
+            }
+
+            Some(coords)
         } else {
             None
         }
@@ -1105,6 +1185,7 @@ impl Term {
     pub fn renderable_cells<'b>(
         &'b self,
         config: &'b Config,
+        font: &'b Font,
         window_focused: bool,
         metrics: font::Metrics,
     ) -> RenderableCellsIter<'_> {
@@ -1122,11 +1203,11 @@ impl Term {
             CursorStyle::HollowBlock
         };
 
-        RenderableCellsIter::new(&self, config, selection, cursor, metrics)
+        RenderableCellsIter::new(&self, config, font, selection, cursor, metrics)
     }
 
     /// Resize terminal to new dimensions
-    pub fn resize(&mut self, size: &SizeInfo) {
+    pub fn resize(&mut self, size: &SizeInfo, usable_font_info: &UsableFontInfo) {
         debug!("Resizing terminal");
 
         // Bounds check; lots of math assumes width and height are > 0
@@ -1146,6 +1227,7 @@ impl Term {
         }
 
         self.size_info = *size;
+        self.usable_font_info = usable_font_info.clone();
 
         if old_cols == num_cols && old_lines == num_lines {
             debug!("Term::resize dimensions unchanged");
@@ -2090,6 +2172,13 @@ impl ansi::Handler for Term {
     fn set_cursor_style(&mut self, style: Option<CursorStyle>) {
         trace!("Setting cursor style {:?}", style);
         self.cursor_style = style;
+    }
+
+    #[inline]
+    fn set_zooms(&mut self, zooms: Vec<Zoom>) {
+        trace!("Setting Zooms");
+
+        self.zooms = zooms;
     }
 }
 
