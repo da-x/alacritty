@@ -13,13 +13,12 @@
 // limitations under the License.
 //
 //! Exports the `Term` type which is a high-level API for the Grid
-use std::cmp::{max, min};
+use std::cmp::min;
 use std::ops::{Index, IndexMut, Range, RangeInclusive};
 use std::time::{Duration, Instant};
 use std::{io, mem, ptr};
 
-use font::{self, Size};
-use glutin::MouseCursor;
+use glutin::window::CursorIcon;
 use unicode_width::UnicodeWidthChar;
 
 use crate::ansi::{
@@ -28,20 +27,19 @@ use crate::ansi::{
 use crate::clipboard::{Clipboard, ClipboardType};
 use crate::config::{Config, VisualBellAnimation};
 use crate::cursor::CursorKey;
+use crate::event::{Event, EventListener};
 use crate::grid::{
     BidirectionalIterator, DisplayIter, Grid, GridCell, IndexRegion, Indexed, Scroll,
     ViewportPosition,
 };
 use crate::index::{self, Column, Contains, IndexRange, Line, Linear, Point};
-use crate::input::FONT_SIZE_STEP;
 use crate::message_bar::MessageBuffer;
 use crate::selection::{self, Selection, Span};
 use crate::term::cell::{Cell, Flags, LineLength};
 use crate::term::color::Rgb;
-use crate::url::{Url, UrlParser};
-
 #[cfg(windows)]
 use crate::tty;
+use crate::url::{Url, UrlParser};
 
 pub mod cell;
 pub mod color;
@@ -64,7 +62,7 @@ pub trait Search {
     fn bracket_search(&self, _: Point<usize>) -> Option<Point<usize>>;
 }
 
-impl Search for Term {
+impl<T> Search for Term<T> {
     fn semantic_search_left(&self, mut point: Point<usize>) -> Point<usize> {
         // Limit the starting point to the last line in the history
         point.line = min(point.line, self.grid.len() - 1);
@@ -187,7 +185,7 @@ impl Search for Term {
     }
 }
 
-impl selection::Dimensions for Term {
+impl<T> selection::Dimensions for Term<T> {
     fn dimensions(&self) -> Point {
         let line = if self.mode.contains(TermMode::ALT_SCREEN) {
             self.grid.num_lines()
@@ -224,8 +222,8 @@ impl<'a> RenderableCellsIter<'a> {
     ///
     /// The cursor and terminal mode are required for properly displaying the
     /// cursor.
-    fn new<'b>(
-        term: &'b Term,
+    fn new<'b, T>(
+        term: &'b Term<T>,
         config: &'b Config,
         selection: Option<Span>,
         mut cursor_style: CursorStyle,
@@ -303,13 +301,13 @@ impl<'a> RenderableCellsIter<'a> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum RenderableCellContent {
     Chars([char; cell::MAX_ZEROWIDTH_CHARS + 1]),
     Cursor(CursorKey),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub struct RenderableCell {
     /// A _Display_ line (not necessarily an _Active_ line)
     pub line: Line,
@@ -717,7 +715,7 @@ impl VisualBell {
     }
 }
 
-pub struct Term {
+pub struct Term<T> {
     /// The grid
     grid: Grid<Cell>,
 
@@ -727,14 +725,6 @@ pub struct Term {
     /// input_needs_wrap ensures that cursor.col is always valid for use into indexing into
     /// arrays. Without it we would have to sanitize cursor.col every time we used it.
     input_needs_wrap: bool,
-
-    /// Got a request to set title; it's buffered here until next draw.
-    ///
-    /// Would be nice to avoid the allocation...
-    next_title: Option<String>,
-
-    /// Got a request to set the mouse cursor; it's buffered here until the next draw
-    next_mouse_cursor: Option<MouseCursor>,
 
     /// Alternate grid
     alt_grid: Grid<Cell>,
@@ -758,17 +748,12 @@ pub struct Term {
     /// Scroll region
     scroll_region: Range<Line>,
 
-    /// Font size
-    pub font_size: Size,
-    original_font_size: Size,
-
     /// Size
     size_info: SizeInfo,
 
     pub dirty: bool,
 
     pub visual_bell: VisualBell,
-    pub next_is_urgent: Option<bool>,
 
     /// Saved cursor from main grid
     cursor_save: Cursor,
@@ -805,15 +790,18 @@ pub struct Term {
     /// Buffer to store messages for the message bar
     message_buffer: MessageBuffer,
 
-    /// Hint that Alacritty should be closed
-    should_exit: bool,
-
     /// Clipboard access coupled to the active window
     clipboard: Clipboard,
+
+    /// Proxy for sending events to the event loop
+    event_proxy: T,
+
+    /// Terminal focus
+    pub is_focused: bool,
 }
 
 /// Terminal size info
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq)]
 pub struct SizeInfo {
     /// Terminal window width
     pub width: f32,
@@ -871,7 +859,7 @@ impl SizeInfo {
     }
 }
 
-impl Term {
+impl<T> Term<T> {
     pub fn selection(&self) -> &Option<Selection> {
         &self.grid.selection
     }
@@ -881,20 +869,13 @@ impl Term {
     }
 
     #[inline]
-    pub fn get_next_title(&mut self) -> Option<String> {
-        self.next_title.take()
-    }
-
-    #[inline]
-    pub fn scroll_display(&mut self, scroll: Scroll) {
+    pub fn scroll_display(&mut self, scroll: Scroll)
+    where
+        T: EventListener,
+    {
         self.grid.scroll_display(scroll);
         self.reset_url_highlight();
         self.dirty = true;
-    }
-
-    #[inline]
-    pub fn get_next_mouse_cursor(&mut self) -> Option<MouseCursor> {
-        self.next_mouse_cursor.take()
     }
 
     pub fn new(
@@ -902,7 +883,8 @@ impl Term {
         size: SizeInfo,
         message_buffer: MessageBuffer,
         clipboard: Clipboard,
-    ) -> Term {
+        event_proxy: T,
+    ) -> Term<T> {
         let num_cols = size.cols();
         let num_lines = size.lines();
 
@@ -918,17 +900,12 @@ impl Term {
         let colors = color::List::from(&config.colors);
 
         Term {
-            next_title: None,
-            next_mouse_cursor: None,
             dirty: false,
             visual_bell: VisualBell::new(config),
-            next_is_urgent: None,
             input_needs_wrap: false,
             grid,
             alt_grid: alt,
             alt: false,
-            font_size: config.font.size,
-            original_font_size: config.font.size,
             active_charset: Default::default(),
             cursor: Default::default(),
             cursor_save: Default::default(),
@@ -947,21 +924,10 @@ impl Term {
             tabspaces,
             auto_scroll: config.scrolling.auto_scroll,
             message_buffer,
-            should_exit: false,
             clipboard,
+            event_proxy,
+            is_focused: true,
         }
-    }
-
-    pub fn change_font_size(&mut self, delta: f32) {
-        // Saturating addition with minimum font size FONT_SIZE_STEP
-        let new_size = self.font_size + Size::new(delta);
-        self.font_size = max(new_size, Size::new(FONT_SIZE_STEP));
-        self.dirty = true;
-    }
-
-    pub fn reset_font_size(&mut self) {
-        self.font_size = self.original_font_size;
-        self.dirty = true;
     }
 
     pub fn update_config(&mut self, config: &Config) {
@@ -979,11 +945,6 @@ impl Term {
         self.dynamic_title = config.dynamic_title();
         self.auto_scroll = config.scrolling.auto_scroll;
         self.grid.update_history(config.scrolling.history() as usize, &self.cursor.template);
-    }
-
-    #[inline]
-    pub fn needs_draw(&self) -> bool {
-        self.dirty
     }
 
     pub fn selection_to_string(&self) -> Option<String> {
@@ -1112,7 +1073,7 @@ impl Term {
         Some(res)
     }
 
-    pub(crate) fn visible_to_buffer(&self, point: Point) -> Point<usize> {
+    pub fn visible_to_buffer(&self, point: Point) -> Point<usize> {
         self.grid.visible_to_buffer(point)
     }
 
@@ -1150,14 +1111,10 @@ impl Term {
     /// A renderable cell is any cell which has content other than the default
     /// background color.  Cells with an alternate background color are
     /// considered renderable as are cells with any text content.
-    pub fn renderable_cells<'b>(
-        &'b self,
-        config: &'b Config,
-        window_focused: bool,
-    ) -> RenderableCellsIter<'_> {
+    pub fn renderable_cells<'b>(&'b self, config: &'b Config) -> RenderableCellsIter<'_> {
         let selection = self.grid.selection.as_ref().and_then(|s| s.to_span(self));
 
-        let cursor = if window_focused || !config.cursor.unfocused_hollow() {
+        let cursor = if self.is_focused || !config.cursor.unfocused_hollow() {
             self.cursor_style.unwrap_or(self.default_cursor_style)
         } else {
             CursorStyle::HollowBlock
@@ -1257,11 +1214,6 @@ impl Term {
     }
 
     #[inline]
-    pub fn size_info(&self) -> &SizeInfo {
-        &self.size_info
-    }
-
-    #[inline]
     pub fn mode(&self) -> &TermMode {
         &self.mode
     }
@@ -1312,7 +1264,10 @@ impl Term {
         self.grid.scroll_up(&(origin..self.scroll_region.end), lines, &template);
     }
 
-    fn deccolm(&mut self) {
+    fn deccolm(&mut self)
+    where
+        T: EventListener,
+    {
         // Setting 132 column font makes no sense, but run the other side effects
         // Clear scrolling region
         let scroll_region = Line(0)..self.grid.num_lines();
@@ -1339,13 +1294,11 @@ impl Term {
     }
 
     #[inline]
-    pub fn exit(&mut self) {
-        self.should_exit = true;
-    }
-
-    #[inline]
-    pub fn should_exit(&self) -> bool {
-        self.should_exit
+    pub fn exit(&mut self)
+    where
+        T: EventListener,
+    {
+        self.event_proxy.send_event(Event::Exit);
     }
 
     #[inline]
@@ -1354,14 +1307,14 @@ impl Term {
     }
 
     #[inline]
-    pub fn reset_url_highlight(&mut self) {
+    pub fn reset_url_highlight(&mut self)
+    where
+        T: EventListener,
+    {
         let mouse_mode =
             TermMode::MOUSE_MOTION | TermMode::MOUSE_DRAG | TermMode::MOUSE_REPORT_CLICK;
-        let mouse_cursor = if self.mode().intersects(mouse_mode) {
-            MouseCursor::Default
-        } else {
-            MouseCursor::Text
-        };
+        let mouse_cursor =
+            if self.mode().intersects(mouse_mode) { CursorIcon::Default } else { CursorIcon::Text };
         self.set_mouse_cursor(mouse_cursor);
 
         self.grid.url_highlight = None;
@@ -1373,7 +1326,7 @@ impl Term {
     }
 }
 
-impl ansi::TermInfo for Term {
+impl<T> ansi::TermInfo for Term<T> {
     #[inline]
     fn lines(&self) -> Line {
         self.grid.num_lines()
@@ -1385,32 +1338,39 @@ impl ansi::TermInfo for Term {
     }
 }
 
-impl ansi::Handler for Term {
-    /// Set the window title
+impl<T: EventListener> ansi::Handler for Term<T> {
     #[inline]
+    #[cfg(not(windows))]
     fn set_title(&mut self, title: &str) {
         if self.dynamic_title {
-            self.next_title = Some(title.to_owned());
+            self.event_proxy.send_event(Event::Title(title.to_owned()));
+        }
+    }
 
-            #[cfg(windows)]
-            {
-                // cmd.exe in winpty: winpty incorrectly sets the title to ' ' instead of
-                // 'Alacritty' - thus we have to substitute this back to get equivalent
-                // behaviour as conpty.
-                //
-                // The starts_with check is necessary because other shells e.g. bash set a
-                // different title and don't need Alacritty prepended.
-                if !tty::is_conpty() && title.starts_with(' ') {
-                    self.next_title = Some(format!("Alacritty {}", title.trim()));
-                }
-            }
+    #[inline]
+    #[cfg(windows)]
+    fn set_title(&mut self, title: &str) {
+        if self.dynamic_title {
+            // cmd.exe in winpty: winpty incorrectly sets the title to ' ' instead of
+            // 'Alacritty' - thus we have to substitute this back to get equivalent
+            // behaviour as conpty.
+            //
+            // The starts_with check is necessary because other shells e.g. bash set a
+            // different title and don't need Alacritty prepended.
+            let title = if !tty::is_conpty() && title.starts_with(' ') {
+                format!("Alacritty {}", title.trim())
+            } else {
+                title.to_owned()
+            };
+
+            self.event_proxy.send_event(Event::Title(title));
         }
     }
 
     /// Set the mouse cursor
     #[inline]
-    fn set_mouse_cursor(&mut self, cursor: MouseCursor) {
-        self.next_mouse_cursor = Some(cursor);
+    fn set_mouse_cursor(&mut self, cursor: CursorIcon) {
+        self.event_proxy.send_event(Event::CursorIcon(cursor));
     }
 
     /// A character to be displayed
@@ -1686,7 +1646,7 @@ impl ansi::Handler for Term {
     fn bell(&mut self) {
         trace!("Bell");
         self.visual_bell.ring();
-        self.next_is_urgent = Some(true);
+        self.event_proxy.send_event(Event::Urgent);
     }
 
     #[inline]
@@ -1966,13 +1926,9 @@ impl ansi::Handler for Term {
             self.swap_alt();
         }
         self.input_needs_wrap = false;
-        self.next_title = None;
-        self.next_mouse_cursor = None;
         self.cursor = Default::default();
         self.active_charset = Default::default();
         self.mode = Default::default();
-        self.font_size = self.original_font_size;
-        self.next_is_urgent = None;
         self.cursor_save = Default::default();
         self.cursor_save_alt = Default::default();
         self.colors = self.original_colors;
@@ -2044,15 +2000,15 @@ impl ansi::Handler for Term {
             ansi::Mode::CursorKeys => self.mode.insert(TermMode::APP_CURSOR),
             ansi::Mode::ReportMouseClicks => {
                 self.mode.insert(TermMode::MOUSE_REPORT_CLICK);
-                self.set_mouse_cursor(MouseCursor::Default);
+                self.set_mouse_cursor(CursorIcon::Default);
             },
             ansi::Mode::ReportCellMouseMotion => {
                 self.mode.insert(TermMode::MOUSE_DRAG);
-                self.set_mouse_cursor(MouseCursor::Default);
+                self.set_mouse_cursor(CursorIcon::Default);
             },
             ansi::Mode::ReportAllMouseMotion => {
                 self.mode.insert(TermMode::MOUSE_MOTION);
-                self.set_mouse_cursor(MouseCursor::Default);
+                self.set_mouse_cursor(CursorIcon::Default);
             },
             ansi::Mode::ReportFocusInOut => self.mode.insert(TermMode::FOCUS_IN_OUT),
             ansi::Mode::BracketedPaste => self.mode.insert(TermMode::BRACKETED_PASTE),
@@ -2084,15 +2040,15 @@ impl ansi::Handler for Term {
             ansi::Mode::CursorKeys => self.mode.remove(TermMode::APP_CURSOR),
             ansi::Mode::ReportMouseClicks => {
                 self.mode.remove(TermMode::MOUSE_REPORT_CLICK);
-                self.set_mouse_cursor(MouseCursor::Text);
+                self.set_mouse_cursor(CursorIcon::Text);
             },
             ansi::Mode::ReportCellMouseMotion => {
                 self.mode.remove(TermMode::MOUSE_DRAG);
-                self.set_mouse_cursor(MouseCursor::Text);
+                self.set_mouse_cursor(CursorIcon::Text);
             },
             ansi::Mode::ReportAllMouseMotion => {
                 self.mode.remove(TermMode::MOUSE_MOTION);
-                self.set_mouse_cursor(MouseCursor::Text);
+                self.set_mouse_cursor(CursorIcon::Text);
             },
             ansi::Mode::ReportFocusInOut => self.mode.remove(TermMode::FOCUS_IN_OUT),
             ansi::Mode::BracketedPaste => self.mode.remove(TermMode::BRACKETED_PASTE),
@@ -2185,18 +2141,22 @@ impl IndexMut<Column> for TabStops {
 mod tests {
     use std::mem;
 
-    use font::Size;
     use serde_json;
 
     use crate::ansi::{self, CharsetIndex, Handler, StandardCharset};
     use crate::clipboard::Clipboard;
     use crate::config::Config;
+    use crate::event::{Event, EventListener};
     use crate::grid::{Grid, Scroll};
     use crate::index::{Column, Line, Point, Side};
-    use crate::input::FONT_SIZE_STEP;
     use crate::message_bar::MessageBuffer;
     use crate::selection::Selection;
     use crate::term::{cell, Cell, SizeInfo, Term};
+
+    struct Mock;
+    impl EventListener for Mock {
+        fn send_event(&self, _event: Event) {}
+    }
 
     #[test]
     fn semantic_selection_works() {
@@ -2210,7 +2170,7 @@ mod tests {
             dpr: 1.0,
         };
         let mut term =
-            Term::new(&Default::default(), size, MessageBuffer::new(), Clipboard::new_nop());
+            Term::new(&Default::default(), size, MessageBuffer::new(), Clipboard::new_nop(), Mock);
         let mut grid: Grid<Cell> = Grid::new(Line(3), Column(5), 0, Cell::default());
         for i in 0..5 {
             for j in 0..2 {
@@ -2255,7 +2215,7 @@ mod tests {
             dpr: 1.0,
         };
         let mut term =
-            Term::new(&Default::default(), size, MessageBuffer::new(), Clipboard::new_nop());
+            Term::new(&Default::default(), size, MessageBuffer::new(), Clipboard::new_nop(), Mock);
         let mut grid: Grid<Cell> = Grid::new(Line(1), Column(5), 0, Cell::default());
         for i in 0..5 {
             grid[Line(0)][Column(i)].c = 'a';
@@ -2281,7 +2241,7 @@ mod tests {
             dpr: 1.0,
         };
         let mut term =
-            Term::new(&Default::default(), size, MessageBuffer::new(), Clipboard::new_nop());
+            Term::new(&Default::default(), size, MessageBuffer::new(), Clipboard::new_nop(), Mock);
         let mut grid: Grid<Cell> = Grid::new(Line(3), Column(3), 0, Cell::default());
         for l in 0..3 {
             if l != 1 {
@@ -2326,81 +2286,12 @@ mod tests {
             dpr: 1.0,
         };
         let mut term =
-            Term::new(&Default::default(), size, MessageBuffer::new(), Clipboard::new_nop());
+            Term::new(&Default::default(), size, MessageBuffer::new(), Clipboard::new_nop(), Mock);
         let cursor = Point::new(Line(0), Column(0));
         term.configure_charset(CharsetIndex::G0, StandardCharset::SpecialCharacterAndLineDrawing);
         term.input('a');
 
         assert_eq!(term.grid()[&cursor].c, '▒');
-    }
-
-    fn change_font_size_works(font_size: f32) {
-        let size = SizeInfo {
-            width: 21.0,
-            height: 51.0,
-            cell_width: 3.0,
-            cell_height: 3.0,
-            padding_x: 0.0,
-            padding_y: 0.0,
-            dpr: 1.0,
-        };
-        let config: Config = Default::default();
-        let mut term: Term = Term::new(&config, size, MessageBuffer::new(), Clipboard::new_nop());
-        term.change_font_size(font_size);
-
-        let expected_font_size: Size = config.font.size + Size::new(font_size);
-        assert_eq!(term.font_size, expected_font_size);
-    }
-
-    #[test]
-    fn increase_font_size_works() {
-        change_font_size_works(10.0);
-    }
-
-    #[test]
-    fn decrease_font_size_works() {
-        change_font_size_works(-10.0);
-    }
-
-    #[test]
-    fn prevent_font_below_threshold_works() {
-        let size = SizeInfo {
-            width: 21.0,
-            height: 51.0,
-            cell_width: 3.0,
-            cell_height: 3.0,
-            padding_x: 0.0,
-            padding_y: 0.0,
-            dpr: 1.0,
-        };
-        let config: Config = Default::default();
-        let mut term: Term = Term::new(&config, size, MessageBuffer::new(), Clipboard::new_nop());
-
-        term.change_font_size(-100.0);
-
-        let expected_font_size: Size = Size::new(FONT_SIZE_STEP);
-        assert_eq!(term.font_size, expected_font_size);
-    }
-
-    #[test]
-    fn reset_font_size_works() {
-        let size = SizeInfo {
-            width: 21.0,
-            height: 51.0,
-            cell_width: 3.0,
-            cell_height: 3.0,
-            padding_x: 0.0,
-            padding_y: 0.0,
-            dpr: 1.0,
-        };
-        let config: Config = Default::default();
-        let mut term: Term = Term::new(&config, size, MessageBuffer::new(), Clipboard::new_nop());
-
-        term.change_font_size(10.0);
-        term.reset_font_size();
-
-        let expected_font_size: Size = config.font.size;
-        assert_eq!(term.font_size, expected_font_size);
     }
 
     #[test]
@@ -2415,7 +2306,7 @@ mod tests {
             dpr: 1.0,
         };
         let config: Config = Default::default();
-        let mut term: Term = Term::new(&config, size, MessageBuffer::new(), Clipboard::new_nop());
+        let mut term = Term::new(&config, size, MessageBuffer::new(), Clipboard::new_nop(), Mock);
 
         // Add one line of scrollback
         term.grid.scroll_up(&(Line(0)..Line(1)), Line(1), &Cell::default());
@@ -2442,11 +2333,17 @@ mod benches {
 
     use crate::clipboard::Clipboard;
     use crate::config::Config;
+    use crate::event::{Event, EventListener};
     use crate::grid::Grid;
     use crate::message_bar::MessageBuffer;
 
     use super::cell::Cell;
     use super::{SizeInfo, Term};
+
+    struct Mock;
+    impl EventListener for Mock {
+        fn send_event(&self, _event: Event) {}
+    }
 
     fn read_string<P>(path: P) -> String
     where
@@ -2484,11 +2381,12 @@ mod benches {
 
         let config = Config::default();
 
-        let mut terminal = Term::new(&config, size, MessageBuffer::new(), Clipboard::new_nop());
+        let mut terminal =
+            Term::new(&config, size, MessageBuffer::new(), Clipboard::new_nop(), Mock);
         mem::swap(&mut terminal.grid, &mut grid);
 
         b.iter(|| {
-            let iter = terminal.renderable_cells(&config, false);
+            let iter = terminal.renderable_cells(&config);
             for cell in iter {
                 test::black_box(cell);
             }

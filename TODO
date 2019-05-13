@@ -1,0 +1,9 @@
+TODO:
+- Changelog:
+    - Opacity works again
+    - Wakeup issues resolved?
+    - macOS/Window freeze during resize
+
+- Create issue about unifying the shader and config reload? Notify required twice :(
+
+- Add back font size tests?

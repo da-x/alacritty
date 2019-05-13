@@ -38,7 +38,7 @@ use winapi::um::winbase::{EXTENDED_STARTUPINFO_PRESENT, STARTF_USESTDHANDLES, ST
 use winapi::um::wincontypes::{COORD, HPCON};
 
 use crate::config::{Config, Shell};
-use crate::display::OnResize;
+use crate::event::OnResize;
 use crate::term::SizeInfo;
 
 /// Dynamically-loaded Pseudoconsole API from kernel32.dll

@@ -64,7 +64,7 @@ impl<'a> Rects<'a> {
     }
 
     /// Update the stored lines with the next cell info.
-    pub fn update_lines(&mut self, size_info: &SizeInfo, cell: &RenderableCell) {
+    pub fn update_lines(&mut self, size_info: &SizeInfo, cell: RenderableCell) {
         for line in self.active_lines.iter_mut() {
             match line.range {
                 // Check for end if line is present
@@ -96,7 +96,7 @@ impl<'a> Rects<'a> {
 
                     // Start a new line if the flag is present
                     if cell.flags.contains(line.flag) {
-                        *start = cell.clone();
+                        *start = cell;
                         *end = cell.into();
                     } else {
                         line.range = None;
@@ -105,7 +105,7 @@ impl<'a> Rects<'a> {
                 // Check for new start of line
                 None => {
                     if cell.flags.contains(line.flag) {
-                        line.range = Some((cell.clone(), cell.into()));
+                        line.range = Some((cell, cell.into()));
                     }
                 },
             };

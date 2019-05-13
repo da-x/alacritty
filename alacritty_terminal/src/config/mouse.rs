@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use glutin::ModifiersState;
+use glutin::event::ModifiersState;
 use serde::{Deserialize, Deserializer};
 
 use crate::config::bindings::{CommandWrapper, ModsWrapper};

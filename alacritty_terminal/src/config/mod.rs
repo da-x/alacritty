@@ -22,7 +22,6 @@ mod bindings;
 mod colors;
 mod debug;
 mod font;
-mod monitor;
 mod mouse;
 mod scrolling;
 #[cfg(test)]
@@ -31,13 +30,12 @@ mod visual_bell;
 mod window;
 
 use crate::ansi::CursorStyle;
-use crate::input::{Binding, KeyBinding, MouseBinding};
 
 pub use crate::config::bindings::Key;
+pub use crate::config::bindings::{Action, Binding, KeyBinding, MouseBinding, RelaxedEq};
 pub use crate::config::colors::Colors;
 pub use crate::config::debug::Debug;
 pub use crate::config::font::{Font, FontDescription};
-pub use crate::config::monitor::Monitor;
 pub use crate::config::mouse::{ClickHandler, Mouse};
 pub use crate::config::scrolling::Scrolling;
 pub use crate::config::visual_bell::{VisualBellAnimation, VisualBellConfig};
@@ -48,7 +46,7 @@ pub static DEFAULT_ALACRITTY_CONFIG: &'static str =
 const MAX_SCROLLBACK_LINES: u32 = 100_000;
 
 /// Top-level config type
-#[derive(Debug, PartialEq, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct Config {
     /// Pixel padding
     #[serde(default, deserialize_with = "failure_default")]
@@ -221,7 +219,7 @@ impl Config {
     }
 }
 
-#[derive(Default, Debug, PartialEq, Eq)]
+#[derive(Clone, Default, Debug, PartialEq, Eq)]
 struct WorkingDirectory(Option<PathBuf>);
 
 impl<'de> Deserialize<'de> for WorkingDirectory {
@@ -333,7 +331,7 @@ impl Cursor {
     }
 }
 
-#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
 pub struct Shell<'a> {
     pub program: Cow<'a, str>,
 
@@ -400,7 +398,7 @@ impl<'a> Deserialize<'a> for Alpha {
     }
 }
 
-#[derive(Deserialize, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Copy, Clone, Debug, PartialEq, Eq)]
 struct Tabspaces(usize);
 
 impl Default for Tabspaces {

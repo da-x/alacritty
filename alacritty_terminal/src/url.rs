@@ -30,6 +30,7 @@ pub struct Url {
 }
 
 /// Parser for streaming inside-out detection of URLs.
+#[derive(Default)]
 pub struct UrlParser {
     state: String,
     origin: usize,
@@ -37,7 +38,7 @@ pub struct UrlParser {
 
 impl UrlParser {
     pub fn new() -> Self {
-        UrlParser { state: String::new(), origin: 0 }
+        Default::default()
     }
 
     /// Advance the parser one character to the left.
@@ -148,13 +149,19 @@ mod tests {
     use unicode_width::UnicodeWidthChar;
 
     use crate::clipboard::Clipboard;
+    use crate::event::{Event, EventListener};
     use crate::grid::Grid;
     use crate::index::{Column, Line, Point};
     use crate::message_bar::MessageBuffer;
     use crate::term::cell::{Cell, Flags};
     use crate::term::{Search, SizeInfo, Term};
 
-    fn url_create_term(input: &str) -> Term {
+    struct Mock;
+    impl EventListener for Mock {
+        fn send_event(&self, _event: Event) {}
+    }
+
+    fn url_create_term(input: &str) -> Term<Mock> {
         let size = SizeInfo {
             width: 21.0,
             height: 51.0,
@@ -167,7 +174,7 @@ mod tests {
 
         let width = input.chars().map(|c| if c.width() == Some(2) { 2 } else { 1 }).sum();
         let mut term =
-            Term::new(&Default::default(), size, MessageBuffer::new(), Clipboard::new_nop());
+            Term::new(&Default::default(), size, MessageBuffer::new(), Clipboard::new_nop(), Mock);
         let mut grid: Grid<Cell> = Grid::new(Line(1), Column(width), 0, Cell::default());
 
         let mut i = 0;

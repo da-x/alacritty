@@ -25,7 +25,7 @@ use winapi::um::synchapi::WaitForSingleObject;
 use winapi::um::winbase::WAIT_OBJECT_0;
 
 use crate::config::Config;
-use crate::display::OnResize;
+use crate::event::OnResize;
 use crate::term::SizeInfo;
 use crate::tty::{EventedPty, EventedReadWrite};
 

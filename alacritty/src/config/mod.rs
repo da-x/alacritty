@@ -13,6 +13,10 @@ use xdg;
 
 use alacritty_terminal::config::{Config, DEFAULT_ALACRITTY_CONFIG};
 
+pub mod monitor;
+
+use crate::config;
+
 pub const SOURCE_FILE_PATH: &str = file!();
 
 /// Result from config loading
@@ -160,7 +164,7 @@ pub fn write_defaults() -> io::Result<Cow<'static, Path>> {
 }
 
 pub fn load_from(path: PathBuf) -> Config {
-    let mut config = reload_from(&path).unwrap_or_else(|_| Config::default());
+    let mut config = config::reload_from(&path).unwrap_or_else(|_| Config::default());
     config.config_path = Some(path);
     config
 }
