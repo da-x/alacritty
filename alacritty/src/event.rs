@@ -344,8 +344,8 @@ impl<N: Notify> Processor<N> {
                 },
                 Event::RedrawRequest => *redraw_requested = true,
                 Event::Resize(size) => {
-                    processor.ctx.window.update_ime_position(processor.ctx.terminal, &size);
                     processor.ctx.terminal.resize(&size);
+                    processor.ctx.window.update_ime_position(processor.ctx.terminal, &size);
                     *processor.ctx.size_info = size;
                     processor.ctx.terminal.dirty = true;
                 },
