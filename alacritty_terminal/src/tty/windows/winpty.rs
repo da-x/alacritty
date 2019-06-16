@@ -28,7 +28,7 @@ use winpty::Config as WinptyConfig;
 use winpty::{ConfigFlags, MouseMode, SpawnConfig, SpawnFlags, Winpty};
 
 use crate::config::{Config, Shell};
-use crate::display::OnResize;
+use crate::event::OnResize;
 use crate::term::SizeInfo;
 
 // We store a raw pointer because we need mutable access to call

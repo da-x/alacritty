@@ -71,8 +71,8 @@ impl From<Point> for Point<usize> {
     }
 }
 
-impl From<&RenderableCell> for Point<Line> {
-    fn from(cell: &RenderableCell) -> Self {
+impl From<RenderableCell> for Point<Line> {
+    fn from(cell: RenderableCell) -> Self {
         Point::new(cell.line, cell.column)
     }
 }

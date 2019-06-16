@@ -21,7 +21,8 @@ use log::{self, LevelFilter};
 
 use alacritty_terminal::config::{Config, Delta, Dimensions, Shell};
 use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::window::DEFAULT_NAME;
+
+use crate::window::DEFAULT_NAME;
 
 /// Options specified on the command line
 pub struct Options {
