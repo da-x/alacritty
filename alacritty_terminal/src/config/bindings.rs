@@ -189,6 +189,9 @@ fn common_keybindings() -> Vec<KeyBinding> {
         Key::Add, [ctrl: true]; Action::IncreaseFontSize;
         Key::Subtract, [ctrl: true]; Action::DecreaseFontSize;
         Key::Minus, [ctrl: true]; Action::DecreaseFontSize;
+        Key::Add, [ctrl: true, shift: true]; Action::IncreasePaneFontSize;
+        Key::Minus, [ctrl: true, shift: true]; Action::DecreasePaneFontSize;
+        Key::Subtract, [ctrl: true, shift: true]; Action::DecreasePaneFontSize;
     )
 }
 
@@ -215,6 +218,9 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
         Key::Equals, [logo: true]; Action::IncreaseFontSize;
         Key::Add, [logo: true]; Action::IncreaseFontSize;
         Key::Minus, [logo: true]; Action::DecreaseFontSize;
+        Key::Add, [ctrl: true, logo: true]; Action::IncreasePaneFontSize;
+        Key::Equals, [ctrl: true, logo: true]; Action::IncreasePaneFontSize;
+        Key::Minus, [ctrl: true, logo: true]; Action::DecreasePaneFontSize;
         Key::F, [ctrl: true, logo: true]; Action::ToggleFullscreen;
         Key::K, [logo: true]; Action::ClearHistory;
         Key::K, [logo: true]; Action::Esc("\x0c".into());
