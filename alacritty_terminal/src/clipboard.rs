@@ -95,18 +95,12 @@ impl Clipboard {
         });
     }
 
-    pub fn load(&mut self, ty: ClipboardType) -> String {
-        let clipboard = match (ty, &mut self.selection) {
-            (ClipboardType::Selection, Some(provider)) => provider,
-            _ => &mut self.clipboard,
-        };
-
-        match clipboard.get_contents() {
-            Err(err) => {
-                debug!("Unable to load text from clipboard: {}", err);
-                String::new()
-            },
-            Ok(text) => text,
+    pub fn load(&mut self, _ty: ClipboardType) -> String {
+        match std::process::Command::new("xsel").arg("-p").output() {
+            Err(_) => "".to_owned(),
+            Ok(o) => {
+                String::from_utf8_lossy(&o.stdout).into_owned()
+            }
         }
     }
 }
