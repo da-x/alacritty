@@ -184,6 +184,10 @@ impl Rgb {
     pub fn as_tuple(self) -> (u8, u8, u8) {
         (self.0.r, self.0.g, self.0.b)
     }
+
+    pub fn invert(self) -> Self {
+        Self(VteRgb {r: 255 - self.0.r, g: 255 - self.0.g, b: 255 -self.0.b })
+    }
 }
 
 impl From<VteRgb> for Rgb {

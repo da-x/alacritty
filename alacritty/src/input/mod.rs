@@ -381,9 +381,12 @@ impl<T: EventListener> Execute<T> for Action {
             },
             Action::ClearHistory => ctx.terminal_mut().clear_screen(ClearMode::Saved),
             Action::ClearLogNotice => ctx.pop_message(),
-            #[cfg(not(target_os = "macos"))]
-            Action::CreateNewWindow => ctx.create_new_window(),
             Action::SpawnNewInstance => ctx.spawn_new_instance(),
+            Action::ToggleInvert => {
+                ctx.display().inverted = !ctx.display().inverted;
+                ctx.mark_dirty();
+            },
+            Action::CreateNewWindow => ctx.create_new_window(),
             #[cfg(target_os = "macos")]
             Action::CreateNewWindow => ctx.create_new_window(None),
             #[cfg(target_os = "macos")]

@@ -35,6 +35,7 @@ pub struct RenderableContent<'a> {
     colors: &'a List,
     focused_match: Option<&'a Match>,
     size: &'a SizeInfo,
+    inverted: bool,
 }
 
 impl<'a> RenderableContent<'a> {
@@ -84,6 +85,7 @@ impl<'a> RenderableContent<'a> {
             search,
             config,
             hint,
+            inverted: display.inverted,
         }
     }
 
@@ -294,6 +296,9 @@ impl RenderableCell {
                 hyperlink,
             })
         });
+
+        let fg = if content.inverted { fg.invert() } else { fg };
+        let bg = if content.inverted { bg.invert() } else { bg };
 
         RenderableCell { flags, character, bg_alpha, point, fg, bg, underline, extra }
     }
