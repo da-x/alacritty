@@ -351,6 +351,8 @@ pub struct Display {
     /// UI cursor visibility for blinking.
     pub cursor_hidden: bool,
 
+    pub inverted: bool,
+
     pub visual_bell: VisualBell,
 
     /// Mapped RGB values for each terminal color.
@@ -514,6 +516,7 @@ impl Display {
             highlighted_hint: None,
             vi_highlighted_hint: None,
             is_wayland,
+            inverted: false,
             cursor_hidden: false,
             frame_timer: FrameTimer::new(),
             visual_bell: VisualBell::from(&config.bell),
@@ -764,6 +767,7 @@ impl Display {
         search_state: &SearchState,
     ) {
         // Collect renderable content before the terminal is dropped.
+        let inverted = self.inverted;
         let mut content = RenderableContent::new(config, self, &terminal, search_state);
         let mut grid_cells = Vec::new();
         for cell in &mut content {
@@ -772,6 +776,10 @@ impl Display {
         let selection_range = content.selection_range();
         let foreground_color = content.color(NamedColor::Foreground as usize);
         let background_color = content.color(NamedColor::Background as usize);
+
+        let foreground_color = if inverted { foreground_color.invert() } else { foreground_color };
+        let background_color = if inverted { background_color.invert() } else { background_color };
+
         let display_offset = content.display_offset();
         let cursor = content.cursor();
 

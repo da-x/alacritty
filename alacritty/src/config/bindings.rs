@@ -177,6 +177,9 @@ pub enum Action {
     /// Clear warning and error notices.
     ClearLogNotice,
 
+    /// Clear warning and error notices.
+    ToggleInvert,
+
     /// Spawn a new instance of Alacritty.
     SpawnNewInstance,
 

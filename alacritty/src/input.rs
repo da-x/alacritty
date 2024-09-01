@@ -354,6 +354,10 @@ impl<T: EventListener> Execute<T> for Action {
             },
             Action::ClearHistory => ctx.terminal_mut().clear_screen(ClearMode::Saved),
             Action::ClearLogNotice => ctx.pop_message(),
+            Action::ToggleInvert => {
+                ctx.display().inverted = !ctx.display().inverted;
+                ctx.mark_dirty();
+            },
             Action::SpawnNewInstance => ctx.spawn_new_instance(),
             Action::CreateNewWindow => ctx.create_new_window(),
             Action::ReceiveChar | Action::None => (),
