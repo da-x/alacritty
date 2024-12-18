@@ -245,6 +245,11 @@ impl GlyphCache {
         glyph.top += i32::from(self.glyph_offset.y);
         glyph.top -= self.metrics.descent as i32;
 
+        if glyph.secondary {
+            // It's a variable size render, put the character in the center
+            glyph.left += ((self.metrics.average_advance - glyph.width as f64) / 2.0) as i32;
+        }
+
         // The metrics of zero-width characters are based on rendering
         // the character after the current cell, with the anchor at the
         // right side of the preceding character. Since we render the
